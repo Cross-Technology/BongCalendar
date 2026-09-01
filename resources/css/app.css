@@ -1,0 +1,106 @@
+@import 'tailwindcss';
+
+/*
+ * Theme is an explicit choice, never inherited from the OS: light is the
+ * designed default and `data-theme="dark"` on <html> opts into the dark set.
+ */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+
+@theme {
+    --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif,
+        'Apple Color Emoji', 'Segoe UI Emoji';
+
+    /* Brand indigo — the single accent the whole product leans on. */
+    --color-brand-50: #eef0ff;
+    --color-brand-100: #e0e3ff;
+    --color-brand-200: #c7cbfe;
+    --color-brand-300: #a5a9fb;
+    --color-brand-400: #8781f7;
+    --color-brand-500: #6f5cf0;
+    --color-brand-600: #5b4ae0;
+    --color-brand-700: #4c3cc6;
+    --color-brand-800: #3f34a0;
+    --color-brand-900: #36307f;
+    --color-brand-950: #221c4a;
+
+    /* Neutral canvas — warmer than pure slate so white cards feel lifted. */
+    --color-ink-50: #f7f8fa;
+    --color-ink-100: #eef0f4;
+    --color-ink-200: #e2e5ec;
+    --color-ink-300: #cbd0da;
+    --color-ink-400: #98a0b0;
+    --color-ink-500: #6b7383;
+    --color-ink-600: #4c5462;
+    --color-ink-700: #363d49;
+    --color-ink-800: #232935;
+    --color-ink-900: #161b24;
+    --color-ink-950: #0d1017;
+}
+
+@layer base {
+    [x-cloak] {
+        display: none !important;
+    }
+
+    html {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Thin, unobtrusive scrollbars — the sidebar and day panel both scroll. */
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--color-ink-300) transparent;
+    }
+
+    *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+
+    *::-webkit-scrollbar-thumb {
+        background-color: var(--color-ink-300);
+        border-radius: 9999px;
+        border: 2px solid transparent;
+        background-clip: content-box;
+    }
+
+    [data-theme='dark'] * {
+        scrollbar-color: var(--color-ink-700) transparent;
+    }
+
+    [data-theme='dark'] *::-webkit-scrollbar-thumb {
+        background-color: var(--color-ink-700);
+    }
+
+    /* Tells the browser which native form/scrollbar chrome to paint. */
+    :root {
+        color-scheme: light;
+    }
+
+    [data-theme='dark'] {
+        color-scheme: dark;
+    }
+}
+
+@utility panel {
+    @apply rounded-2xl border border-ink-200/80 bg-white dark:border-ink-800 dark:bg-ink-900;
+}
+
+/* Staggered entrance for the day cells / event rows. */
+@keyframes rise {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@utility rise {
+    animation: rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
