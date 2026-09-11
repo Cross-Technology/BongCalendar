@@ -145,6 +145,7 @@
                             $primary = [
                                 ['route' => 'dashboard', 'label' => 'Calendar', 'icon' => 'calendar'],
                                 ['route' => 'tasks.index', 'label' => 'Tasks', 'icon' => 'check', 'badge' => $openTasks],
+                                ['route' => 'notes.index', 'label' => 'Notes', 'icon' => 'note'],
                                 ['route' => 'invitations.index', 'label' => 'Invitations', 'icon' => 'inbox', 'badge' => $pendingInvites],
                             ];
                         @endphp

@@ -5,12 +5,14 @@ namespace App\Providers;
 use App\Models\Calendar;
 use App\Models\Department;
 use App\Models\Event;
+use App\Models\Note;
 use App\Models\Task;
 use App\Models\TaskTemplate;
 use App\Models\Tenant;
 use App\Policies\CalendarPolicy;
 use App\Policies\DepartmentPolicy;
 use App\Policies\EventPolicy;
+use App\Policies\NotePolicy;
 use App\Policies\TaskPolicy;
 use App\Policies\TaskTemplatePolicy;
 use App\Policies\TenantPolicy;
@@ -38,6 +40,7 @@ class AppServiceProvider extends ServiceProvider
         Gate::policy(Calendar::class, CalendarPolicy::class);
         Gate::policy(Event::class, EventPolicy::class);
         Gate::policy(Department::class, DepartmentPolicy::class);
+        Gate::policy(Note::class, NotePolicy::class);
         Gate::policy(Task::class, TaskPolicy::class);
         Gate::policy(TaskTemplate::class, TaskTemplatePolicy::class);
 

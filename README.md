@@ -111,6 +111,19 @@ workspace other than the caller's active one; without it the user's `current_ten
 | GET | `/invitations` | The caller's invitations; `?status=pending`. |
 | POST | `/events/{event}/respond` | `{"status": "accepted" \| "declined" \| "tentative"}` |
 
+### Notes (tenant-scoped)
+
+The workspace noticeboard. A note is shared with the whole workspace by
+default (`visibility: tenant`); its author can keep it to themselves with
+`private`, and admin rank does not open a private note.
+
+| Method | Route | Notes |
+|---|---|---|
+| GET | `/notes` | Shared notes plus the caller's own private ones, pinned first. `?q=` searches title and body, `?mine=1` narrows to the caller, `?pinned=1` to pinned. Paginated. |
+| POST | `/notes` | `body` is required; `title`, `color`, `visibility` and `is_pinned` are optional. |
+| GET / PATCH / DELETE | `/notes/{note}` | Editing is the author's, or an admin's on a *shared* note. Only the author changes `visibility`. |
+| POST | `/notes/{note}/pin` | Toggles, or takes `{"is_pinned": true\|false}`. |
+
 ### Example
 
 ```bash
@@ -131,6 +144,7 @@ curl -s localhost:8000/api/v1/events \
 | `/dashboard` | Month grid, per-calendar filters, create/edit/delete events with guests. Month and filters live in the URL. |
 | `/calendars` | Calendar CRUD, visibility, colour, and sharing with workspace members. |
 | `/workspaces` | Create and switch workspaces, manage members and roles. |
+| `/notes` | Workspace noticeboard: write, search, filter, pin and colour notes. Search and filter live in the URL. |
 | `/invitations` | Accept / maybe / decline invitations. |
 
 Livewire's update endpoint does not re-run a page route's custom middleware, so components

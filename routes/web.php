@@ -17,6 +17,7 @@ Route::middleware('auth')->group(function () {
     Route::livewire('/calendars', 'pages::calendars')->name('calendars.index');
     Route::livewire('/departments', 'pages::departments')->name('departments.index');
     Route::livewire('/tasks', 'pages::tasks')->name('tasks.index');
+    Route::livewire('/notes', 'pages::notes')->name('notes.index');
     Route::livewire('/invitations', 'pages::invitations')->name('invitations.index');
     Route::livewire('/workspaces', 'pages::workspaces')->name('workspaces.index');
 

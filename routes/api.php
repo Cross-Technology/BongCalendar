@@ -3,10 +3,11 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CalendarController;
 use App\Http\Controllers\Api\ChecklistController;
-use App\Http\Controllers\Api\DeviceController;
 use App\Http\Controllers\Api\DepartmentController;
+use App\Http\Controllers\Api\DeviceController;
 use App\Http\Controllers\Api\EventController;
 use App\Http\Controllers\Api\InvitationController;
+use App\Http\Controllers\Api\NoteController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TaskTemplateController;
 use App\Http\Controllers\Api\TenantController;
@@ -80,6 +81,12 @@ Route::prefix('v1')->group(function () {
             Route::delete('calendars/{calendar}/shares/{user}', [CalendarController::class, 'revokeShare']);
 
             Route::apiResource('events', EventController::class)->names('api.events');
+
+            // The workspace noticeboard. Pinning is its own endpoint for the
+            // same reason task status is: it is the one field a client flips
+            // on its own, without resubmitting the note.
+            Route::apiResource('notes', NoteController::class)->names('api.notes');
+            Route::post('notes/{note}/pin', [NoteController::class, 'pin']);
 
             Route::apiResource('tasks', TaskController::class)->names('api.tasks');
             // Status is its own endpoint: it is the one field with a side

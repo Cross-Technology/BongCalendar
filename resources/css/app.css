@@ -89,6 +89,42 @@
     @apply rounded-2xl border border-ink-200/80 bg-white dark:border-ink-800 dark:bg-ink-900;
 }
 
+/*
+ * A note carries its own colour: each card sets `--note-color` inline, and the
+ * hue becomes a spine down the left edge plus a wash that fades across the card.
+ */
+@utility note-card {
+    --note-tint: 8%;
+    border-left-style: solid;
+    border-left-width: 3px;
+    border-left-color: var(--note-color, var(--color-brand-500));
+}
+
+/*
+ * Both rules below are deliberately unlayered. `@utility` compiles into
+ * Tailwind's `utilities` layer, which outranks `base` however specific the
+ * selector is — so a dark-theme override written in `base` would silently lose.
+ * Unlayered rules beat every layer, which is exactly what these two need.
+ *
+ * The wash is gated on @supports so a browser without `color-mix` gets the
+ * coloured spine on its own, rather than the full-strength gradient that a
+ * generated fallback would paint behind the text.
+ */
+@supports (background: color-mix(in srgb, red 8%, transparent)) {
+    .note-card {
+        background-image: linear-gradient(
+            105deg,
+            color-mix(in srgb, var(--note-color, var(--color-brand-500)) var(--note-tint), transparent),
+            transparent 62%
+        );
+    }
+}
+
+/* The wash needs more weight to register against a dark card. */
+[data-theme='dark'] .note-card {
+    --note-tint: 20%;
+}
+
 /* Staggered entrance for the day cells / event rows. */
 @keyframes rise {
     from {
