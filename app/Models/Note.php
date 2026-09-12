@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
@@ -17,8 +18,11 @@ use Illuminate\Support\Str;
  * Notes are shared by default (`tenant` visibility, the same word calendars
  * use) so the workspace reads them as a noticeboard; the author can keep one
  * to themselves with `private`.
+ *
+ * `body` is sanitised HTML from the editor and `body_text` its plain-text
+ * rendering — RichTextService owns both, and nothing else should write them.
  */
-#[Fillable(['tenant_id', 'author_id', 'title', 'body', 'color', 'visibility', 'is_pinned'])]
+#[Fillable(['tenant_id', 'author_id', 'title', 'body', 'body_text', 'color', 'visibility', 'is_pinned'])]
 class Note extends Model
 {
     use HasFactory, SoftDeletes;
@@ -49,6 +53,12 @@ class Note extends Model
         return $this->belongsTo(User::class, 'author_id');
     }
 
+    /** @return MorphMany<Attachment, $this> */
+    public function attachments(): MorphMany
+    {
+        return $this->morphMany(Attachment::class, 'attachable')->latest('id');
+    }
+
     /* --------------------------------------------------------------- scopes */
 
     public function scopeForTenant(Builder $query, int $tenantId): Builder
@@ -75,7 +85,11 @@ class Note extends Model
         return $query->orderByDesc('is_pinned')->orderByDesc('updated_at')->orderByDesc('id');
     }
 
-    /** Free-text search across the title and the body. */
+    /**
+     * Free-text search across the title and the note's text. Deliberately not
+     * the markup: searching that matches tag names and misses any phrase a
+     * bold tag happens to split.
+     */
     public function scopeSearch(Builder $query, ?string $term): Builder
     {
         $term = trim((string) $term);
@@ -89,7 +103,7 @@ class Note extends Model
 
         return $query->where(fn (Builder $q) => $q
             ->where('title', 'like', $like)
-            ->orWhere('body', 'like', $like));
+            ->orWhere('body_text', 'like', $like));
     }
 
     /* -------------------------------------------------------------- helpers */
@@ -102,11 +116,11 @@ class Note extends Model
     /** Heading for a note that was saved without a title. */
     public function displayTitle(): string
     {
-        return $this->title ?: (Str::limit(strtok((string) $this->body, "\n"), 60) ?: 'Untitled note');
+        return $this->title ?: (Str::limit(strtok((string) $this->body_text, "\n"), 60) ?: 'Untitled note');
     }
 
     public function excerpt(int $length = 180): string
     {
-        return Str::limit((string) $this->body, $length);
+        return Str::limit((string) $this->body_text, $length);
     }
 }

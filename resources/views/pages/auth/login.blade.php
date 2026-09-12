@@ -16,13 +16,22 @@ class extends Component
     #[Validate('required|string')]
     public string $password = '';
 
-    public bool $remember = false;
 
     public function login()
     {
         $this->validate();
 
-        if (! Auth::attempt(['email' => strtolower($this->email), 'password' => $this->password], $this->remember)) {
+        /*
+         * Always "remember".
+         *
+         * The session cookie alone dies with the session; the remember-me
+         * cookie is what brings someone back afterwards, and Auth::logout()
+         * cycles the token behind it — so signing out is the one thing that
+         * ends a session, which is the whole point.
+         */
+        $remember = true;
+
+        if (! Auth::attempt(['email' => strtolower($this->email), 'password' => $this->password], $remember)) {
             throw ValidationException::withMessages([
                 'email' => 'These credentials do not match our records.',
             ]);
@@ -57,9 +66,9 @@ class extends Component
             @error('password') <p class="mt-1 text-sm text-red-600">{{ $message }}</p> @enderror
         </div>
 
-        <label class="flex items-center gap-2 text-sm text-ink-600 dark:text-ink-300">
-            <input type="checkbox" wire:model="remember" class="rounded border-ink-300"> Remember me
-        </label>
+        <p class="text-[13px] text-ink-500 dark:text-ink-400">
+            You'll stay signed in on this device until you sign out.
+        </p>
 
         <button type="submit"
                 class="w-full rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"

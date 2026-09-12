@@ -20,7 +20,9 @@ class NoteResource extends JsonResource
             'author_id' => $this->author_id,
             'title' => $this->title,
             'display_title' => $this->displayTitle(),
+            // Sanitised on the way in — safe to render as markup.
             'body' => $this->body,
+            'body_text' => $this->body_text,
             'excerpt' => $this->excerpt(),
             'color' => $this->color,
             'visibility' => $this->visibility,
@@ -29,6 +31,8 @@ class NoteResource extends JsonResource
             // Lets a client hide the edit affordance without a second call.
             'can_edit' => $user ? $user->can('update', $this->resource) : false,
             'author' => new UserResource($this->whenLoaded('author')),
+            'attachments' => AttachmentResource::collection($this->whenLoaded('attachments')),
+            'attachments_count' => $this->whenCounted('attachments'),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

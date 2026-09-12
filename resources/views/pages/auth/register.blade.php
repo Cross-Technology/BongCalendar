@@ -47,7 +47,9 @@ class extends Component
             return $user->fresh();
         });
 
-        Auth::login($user);
+        // remember: true for the same reason as the sign-in page — the session
+        // lasts until they sign out, not until the cookie ages out.
+        Auth::login($user, remember: true);
         session()->regenerate();
 
         return redirect()->route('dashboard');

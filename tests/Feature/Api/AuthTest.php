@@ -67,24 +67,24 @@ class AuthTest extends TestCase
     }
 
     /**
-     * A client refreshes precisely because its access token has expired, so the
-     * refresh route must accept an expired token that is still inside the
-     * refresh window — otherwise every screen is stuck on "Unauthenticated."
+     * Tokens do not expire — people stay signed in until they sign out — so a
+     * client never has to refresh. The route stays because rotating a token
+     * without signing out is still worth doing, and it must work on a token of
+     * any age rather than quietly cutting clients off at some window.
      */
-    public function test_an_expired_token_can_still_be_refreshed(): void
+    public function test_refresh_rotates_a_token_of_any_age(): void
     {
         $user = User::factory()->create(['email' => 'rady@example.com']);
         app(WorkspaceService::class)->create($user, 'Acme');
 
-        $expired = $this->travelTo(now()->subHours(2), fn () => JWTAuth::fromUser($user));
+        $old = $this->travelTo(now()->subYear(), fn () => JWTAuth::fromUser($user));
 
-        // The expired token is rejected everywhere else...
-        $this->withHeader('Authorization', "Bearer {$expired}")
+        // Age alone shuts nobody out any more.
+        $this->withHeader('Authorization', "Bearer {$old}")
             ->getJson('/api/v1/calendars')
-            ->assertUnauthorized();
+            ->assertOk();
 
-        // ...but still buys a fresh one.
-        $token = $this->withHeader('Authorization', "Bearer {$expired}")
+        $token = $this->withHeader('Authorization', "Bearer {$old}")
             ->postJson('/api/v1/auth/refresh')
             ->assertOk()
             ->assertJsonPath('user.email', 'rady@example.com')
@@ -101,14 +101,25 @@ class AuthTest extends TestCase
             ->assertOk();
     }
 
-    public function test_refresh_rejects_a_token_beyond_the_refresh_window(): void
+    /**
+     * Signing out is the boundary that replaced expiry: a revoked token cannot
+     * be traded back in for a working one.
+     */
+    public function test_a_signed_out_token_cannot_be_refreshed(): void
     {
         $user = User::factory()->create();
+        app(WorkspaceService::class)->create($user, 'Acme');
 
-        // refresh_ttl defaults to 14 days; a month-old token is past saving.
-        $stale = $this->travelTo(now()->subDays(30), fn () => JWTAuth::fromUser($user));
+        $token = JWTAuth::fromUser($user);
 
-        $this->withHeader('Authorization', "Bearer {$stale}")
+        $this->withHeader('Authorization', "Bearer {$token}")
+            ->postJson('/api/v1/auth/logout')
+            ->assertOk();
+
+        app('tymon.jwt')->unsetToken();
+        Auth::forgetGuards();
+
+        $this->withHeader('Authorization', "Bearer {$token}")
             ->postJson('/api/v1/auth/refresh')
             ->assertUnauthorized()
             ->assertJsonPath('message', 'Your session has expired. Please sign in again.');

@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import 'trix/dist/trix.css';
 
 /*
  * Theme is an explicit choice, never inherited from the OS: light is the
@@ -124,6 +125,328 @@
 [data-theme='dark'] .note-card {
     --note-tint: 20%;
 }
+
+/*
+ * Installed to a home screen the app owns the entire screen, notch and home
+ * indicator included, so its own chrome has to step around them. The layout's
+ * `viewport-fit=cover` is what makes these insets report a non-zero value;
+ * in a normal browser tab they are 0 and these rules cost nothing.
+ *
+ * Unlayered, like the rules above: they have to outrank the Tailwind padding
+ * utilities sitting on the same elements, and `utilities` beats every layer.
+ */
+@media (display-mode: standalone) {
+    .pwa-inset-top {
+        padding-top: calc(0.75rem + env(safe-area-inset-top));
+    }
+
+    .pwa-inset-bottom {
+        padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    }
+}
+
+/*
+ * Trix's toolbar, rebuilt as a ribbon.
+ *
+ * Out of the box it is a row of floated, borderless text-height buttons whose
+ * icons sit at 0.6 opacity — hard to read on white and invisible on a dark
+ * card, since the icons are black SVGs. This gives them square 32px targets,
+ * full contrast, dividers between the groups, and a highlight on the ones
+ * currently applied, the way a word processor's ribbon reads.
+ *
+ * Unlayered like the rules above, so these beat Tailwind's preflight.
+ */
+trix-toolbar {
+    border: 1px solid var(--color-ink-200);
+    border-bottom: 0;
+    border-radius: 0.75rem 0.75rem 0 0;
+    background: var(--color-ink-50);
+    padding: 0.3125rem;
+}
+
+trix-toolbar .trix-button-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.125rem;
+    overflow: visible;
+}
+
+trix-toolbar .trix-button-group {
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    margin: 0;
+    padding: 0 0.25rem;
+    border: 0;
+    border-radius: 0;
+}
+
+/* Ribbon-style divider between groups. */
+trix-toolbar .trix-button-group + .trix-button-group {
+    border-left: 1px solid var(--color-ink-200);
+}
+
+/* Pushes undo/redo to the far end. */
+trix-toolbar .trix-button-group-spacer {
+    flex: 1 1 auto;
+}
+
+trix-toolbar .trix-button {
+    float: none;
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0.375rem;
+    background: transparent;
+    color: var(--color-ink-600);
+    font-size: 12px;
+    font-weight: 700;
+    transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+trix-toolbar .trix-button:not(:disabled):hover {
+    background: var(--color-ink-200);
+    color: var(--color-ink-900);
+}
+
+trix-toolbar .trix-button:focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 1px;
+}
+
+/*
+ * The "currently applied" state. A light highlight rather than a solid fill,
+ * so the black icon keeps its contrast and needs no inversion — and it reads
+ * as a pressed toggle rather than a different button.
+ */
+trix-toolbar .trix-button.trix-active {
+    background: var(--color-brand-100);
+    color: var(--color-brand-700);
+}
+
+trix-toolbar .trix-button:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+/*
+ * Trix clamps its icon buttons with `max-width: calc(0.8em + 4vw)`, which on a
+ * phone works out at about 26px — shrinking the targets on exactly the screens
+ * where they are hardest to hit. The size is pinned here instead, and grows a
+ * little on touch-sized screens.
+ */
+trix-toolbar .trix-button--icon {
+    width: 2rem;
+    height: 2rem;
+    max-width: none;
+}
+
+@media (max-width: 640px) {
+    trix-toolbar .trix-button,
+    trix-toolbar .trix-button--icon {
+        width: 2.25rem;
+        height: 2.25rem;
+    }
+}
+
+/* Trix dims its icons to 0.6; at this size they can be read properly. */
+trix-toolbar .trix-button--icon::before {
+    opacity: 0.85;
+}
+
+trix-toolbar .trix-button:hover .trix-button--icon::before,
+trix-toolbar .trix-button--icon:hover::before,
+trix-toolbar .trix-button--icon.trix-active::before {
+    opacity: 1;
+}
+
+/*
+ * File attachments are refused in app.js — there is no upload endpoint behind
+ * them — so Trix's paperclip would be a button that does nothing. Notes carry
+ * their own file picker beneath the editor instead.
+ */
+trix-toolbar .trix-button-group--file-tools {
+    display: none;
+}
+
+/* The editor is the lower half of the same control as the toolbar. */
+trix-editor {
+    min-height: 14rem;
+    border: 1px solid var(--color-ink-200);
+    border-radius: 0 0 0.75rem 0.75rem;
+    background: #fff;
+    padding: 0.75rem 0.875rem;
+}
+
+trix-editor:focus {
+    outline: none;
+    border-color: var(--color-brand-400);
+    box-shadow: 0 0 0 3px var(--color-brand-100);
+}
+
+trix-editor:empty:not(:focus)::before {
+    color: var(--color-ink-300);
+}
+
+/* ── Dark theme ─────────────────────────────────────────────────────────── */
+
+[data-theme='dark'] trix-toolbar {
+    border-color: var(--color-ink-700);
+    background: var(--color-ink-900);
+}
+
+[data-theme='dark'] trix-toolbar .trix-button-group + .trix-button-group {
+    border-left-color: var(--color-ink-700);
+}
+
+[data-theme='dark'] trix-toolbar .trix-button {
+    color: var(--color-ink-300);
+}
+
+[data-theme='dark'] trix-toolbar .trix-button:not(:disabled):hover {
+    background: var(--color-ink-700);
+    color: #fff;
+}
+
+[data-theme='dark'] trix-toolbar .trix-button.trix-active {
+    background: var(--color-brand-900);
+    color: var(--color-brand-100);
+}
+
+/*
+ * Trix's icons are black SVGs baked into background images, so they cannot
+ * inherit a colour. Inverting them is what makes them visible on a dark bar.
+ */
+[data-theme='dark'] trix-toolbar .trix-button--icon::before {
+    filter: invert(1);
+}
+
+[data-theme='dark'] trix-editor {
+    border-color: var(--color-ink-700);
+    background: var(--color-ink-800);
+    color: var(--color-ink-100);
+}
+
+[data-theme='dark'] trix-editor:focus {
+    border-color: var(--color-brand-400);
+    box-shadow: 0 0 0 3px var(--color-brand-950);
+}
+
+/*
+ * Rich text typography — for BOTH the saved markup (.rich-text) and the live
+ * editor (trix-editor).
+ *
+ * Applying it to only one of them is what breaks WYSIWYG: Tailwind's preflight
+ * resets `ol, ul, menu { list-style: none }`, flattens headings to body text
+ * and strips link colour, and those resets reach inside the editor too. Trix
+ * ships no typography of its own, so a bulleted list looked like unmarked
+ * lines while being typed even though it rendered correctly once saved.
+ *
+ * Unlayered, so it outranks preflight whichever layer that sits in.
+ */
+:is(.rich-text, trix-editor) {
+    font-size: 15px;
+    line-height: 1.7;
+    word-break: break-word;
+}
+
+:is(.rich-text, trix-editor) > * + * {
+    margin-top: 0.75rem;
+}
+
+:is(.rich-text, trix-editor) h1 {
+    font-size: 1.125rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+}
+
+:is(.rich-text, trix-editor) strong {
+    font-weight: 700;
+}
+
+:is(.rich-text, trix-editor) em {
+    font-style: italic;
+}
+
+:is(.rich-text, trix-editor) del {
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+:is(.rich-text, trix-editor) a {
+    color: var(--color-brand-600);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+:is(.rich-text, trix-editor) ul,
+:is(.rich-text, trix-editor) ol {
+    padding-left: 1.35rem;
+}
+
+/*
+ * Longhand on purpose. `list-style: disc` is a shorthand whose other parts
+ * reset to their initial values, and a minifier is entitled to rewrite it as
+ * `list-style: outside` — correct, but impossible to read and easy to "fix"
+ * into something broken. The longhand says what it means.
+ */
+:is(.rich-text, trix-editor) ul {
+    list-style-type: disc;
+    list-style-position: outside;
+}
+
+:is(.rich-text, trix-editor) ol {
+    list-style-type: decimal;
+    list-style-position: outside;
+}
+
+/* Trix nests a sublist inside its parent <li>, so mark the levels apart. */
+:is(.rich-text, trix-editor) ul ul {
+    list-style-type: circle;
+}
+
+:is(.rich-text, trix-editor) ul ul ul {
+    list-style-type: square;
+}
+
+:is(.rich-text, trix-editor) li {
+    display: list-item;
+}
+
+:is(.rich-text, trix-editor) li + li {
+    margin-top: 0.25rem;
+}
+
+/* A nested list hangs off its item, not adrift from it. */
+:is(.rich-text, trix-editor) li > ul,
+:is(.rich-text, trix-editor) li > ol {
+    margin-top: 0.25rem;
+}
+
+:is(.rich-text, trix-editor) blockquote {
+    border-left: 3px solid var(--color-ink-200);
+    padding-left: 0.875rem;
+    color: var(--color-ink-500);
+}
+
+:is(.rich-text, trix-editor) pre {
+    border-radius: 0.5rem;
+    background: var(--color-ink-100);
+    padding: 0.75rem 0.875rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    white-space: pre-wrap;
+    overflow-x: auto;
+}
+
+[data-theme='dark'] :is(.rich-text, trix-editor) a { color: var(--color-brand-300); }
+[data-theme='dark'] :is(.rich-text, trix-editor) blockquote { border-left-color: var(--color-ink-700); }
+[data-theme='dark'] :is(.rich-text, trix-editor) pre { background: var(--color-ink-800); }
 
 /* Staggered entrance for the day cells / event rows. */
 @keyframes rise {

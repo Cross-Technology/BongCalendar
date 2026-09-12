@@ -104,6 +104,38 @@ class TenantController extends Controller
         return response()->json(['message' => 'Member added.', 'data' => new UserResource($user)], 201);
     }
 
+    /**
+     * Promote a member to admin, or put an admin back to member. Owner-only —
+     * see TenantPolicy::manageRoles.
+     */
+    public function updateMemberRole(Request $request, Tenant $tenant, User $user): JsonResponse
+    {
+        $this->authorize('manageRoles', $tenant);
+
+        $data = $request->validate([
+            'role' => ['required', Rule::in(WorkspaceService::ASSIGNABLE_ROLES)],
+        ]);
+
+        if ($tenant->owner_id === $user->id) {
+            return response()->json(['message' => "The workspace owner's role cannot be changed."], 422);
+        }
+
+        if (! $user->belongsToTenant($tenant->id)) {
+            return response()->json(['message' => 'That user is not a member of this workspace.'], 404);
+        }
+
+        $this->workspaces->changeRole($tenant, $user, $data['role']);
+
+        // Re-read through the relation so the pivot — and so the resource's
+        // `role` — reflects the change rather than the role it came in with.
+        $member = $tenant->users()->whereKey($user->id)->firstOrFail();
+
+        return response()->json([
+            'message' => 'Role updated.',
+            'data' => new UserResource($member),
+        ]);
+    }
+
     public function removeMember(Request $request, Tenant $tenant, User $user): JsonResponse
     {
         $this->authorize('manageMembers', $tenant);

@@ -23,7 +23,8 @@ class NoteRequest extends FormRequest
         return [
             // The body carries the note; a title is a convenience on top of it.
             'title' => ['nullable', 'string', 'max:255'],
-            'body' => [$required, 'string', 'max:20000'],
+            // Markup now, so the ceiling is raised accordingly.
+            'body' => [$required, 'string', 'max:200000'],
             'color' => ['nullable', 'string', 'regex:/^#[0-9a-fA-F]{6}$/'],
             'visibility' => ['nullable', Rule::in(Note::VISIBILITIES)],
             'is_pinned' => ['nullable', 'boolean'],

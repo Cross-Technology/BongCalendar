@@ -6,9 +6,17 @@ use App\Models\Calendar;
 use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 
 class WorkspaceService
 {
+    /**
+     * Roles that can be handed out after the fact. `owner` is missing on
+     * purpose: a workspace has exactly one, and passing it on is a different
+     * decision from granting admin rights.
+     */
+    public const ASSIGNABLE_ROLES = ['admin', 'member'];
+
     /**
      * Create a workspace, make the user its owner, and give them a default
      * calendar so they never land on an empty dashboard.
@@ -71,6 +79,32 @@ class WorkspaceService
             $user->current_tenant_id ??= $tenant->id;
             $user->save();
         });
+    }
+
+    /**
+     * Promote or demote an existing member.
+     *
+     * The guards are here rather than only in the callers because they are
+     * invariants, not presentation: whatever calls this, the workspace must
+     * come out the other side with its owner intact.
+     *
+     * @throws InvalidArgumentException
+     */
+    public function changeRole(Tenant $tenant, User $user, string $role): void
+    {
+        if (! in_array($role, self::ASSIGNABLE_ROLES, true)) {
+            throw new InvalidArgumentException("Cannot assign the role [{$role}].");
+        }
+
+        if ($tenant->owner_id === $user->id) {
+            throw new InvalidArgumentException('The workspace owner\'s role cannot be changed.');
+        }
+
+        if (! $tenant->users()->whereKey($user->id)->exists()) {
+            throw new InvalidArgumentException('That user is not a member of this workspace.');
+        }
+
+        $tenant->users()->updateExistingPivot($user->id, ['role' => $role]);
     }
 
     public function removeMember(Tenant $tenant, User $user): void

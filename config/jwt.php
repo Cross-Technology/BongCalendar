@@ -92,7 +92,14 @@ return [
     |
     */
 
-    'ttl' => (int) env('JWT_TTL', 60),
+    /*
+     * `null` means the token never expires — people stay signed in until they
+     * actually sign out, which is what revokes it (see blacklist_enabled).
+     *
+     * The null has to survive the cast: `(int) null` is 0, which would expire
+     * every token the moment it was issued and lock everybody out.
+     */
+    'ttl' => env('JWT_TTL', 60) === null ? null : (int) env('JWT_TTL', 60),
 
     /*
     |--------------------------------------------------------------------------
@@ -121,7 +128,9 @@ return [
     */
 
     'refresh_iat' => env('JWT_REFRESH_IAT', false),
-    'refresh_ttl' => (int) env('JWT_REFRESH_TTL', 20160),
+    // Same null handling as ttl. Moot while tokens do not expire, but a 0 here
+    // would be just as damaging if someone ever turns expiry back on.
+    'refresh_ttl' => env('JWT_REFRESH_TTL', 20160) === null ? null : (int) env('JWT_REFRESH_TTL', 20160),
 
     /*
     |--------------------------------------------------------------------------
@@ -148,10 +157,18 @@ return [
     |
     */
 
+    /*
+     * `exp` is deliberately absent.
+     *
+     * With `ttl => null` the issued token carries no expiry claim at all, and
+     * leaving `exp` on this list would make the validator reject every token
+     * the moment it was issued — "JWT payload does not contain the required
+     * claims". A token that *does* carry an exp is still checked against it;
+     * this only stops one being demanded.
+     */
     'required_claims' => [
         'iss',
         'iat',
-        'exp',
         'nbf',
         'sub',
         'jti',

@@ -170,6 +170,27 @@ class extends Component
         session()->flash('status', "You joined {$tenant->name}.");
     }
 
+    /**
+     * Promote a member to admin, or put an admin back to member. Owner-only:
+     * an admin who could appoint admins could promote themselves past the
+     * owner, so TenantPolicy::manageRoles keeps this with the owner alone.
+     */
+    public function changeRole(int $tenantId, int $userId, string $role, WorkspaceService $workspaces): void
+    {
+        $tenant = Tenant::findOrFail($tenantId);
+        $this->authorize('manageRoles', $tenant);
+
+        try {
+            $workspaces->changeRole($tenant, User::findOrFail($userId), $role);
+        } catch (\InvalidArgumentException $e) {
+            session()->flash('error', $e->getMessage());
+
+            return;
+        }
+
+        session()->flash('status', 'Role updated.');
+    }
+
     public function removeMember(int $tenantId, int $userId, WorkspaceService $workspaces): void
     {
         $tenant = Tenant::findOrFail($tenantId);
@@ -195,6 +216,7 @@ class extends Component
         return [
             'workspaceList' => $this->workspaces(),
             'managing' => $managing,
+            'canManageRoles' => $managing && $this->currentUser()->can('manageRoles', $managing),
             'pendingInvitations' => $managing
                 ? $managing->invitations()->pending()->with('inviter:id,name')->latest()->get()
                 : collect(),
@@ -320,14 +342,38 @@ class extends Component
 
                 <ul class="max-h-64 divide-y divide-ink-100 overflow-y-auto px-5 dark:divide-ink-800">
                     @foreach ($managing->users as $member)
-                        <li class="flex items-center gap-3 py-3">
+                        <li class="flex items-center gap-3 py-3" wire:key="member-{{ $member->id }}">
                             <div class="min-w-0 flex-1">
-                                <p class="truncate text-sm font-medium">{{ $member->name }}</p>
+                                <p class="truncate text-sm font-medium">
+                                    {{ $member->name }}
+                                    @if ($member->id === $this->currentUser()->id)
+                                        <span class="text-xs font-normal text-ink-400">(you)</span>
+                                    @endif
+                                </p>
                                 <p class="truncate text-xs text-ink-500">{{ $member->email }}</p>
                             </div>
-                            <span class="rounded bg-ink-100 px-2 py-0.5 text-[10px] font-medium text-ink-600 dark:bg-ink-800 dark:text-ink-300">
-                                {{ $member->pivot->role }}
-                            </span>
+
+                            @if ($managing->owner_id === $member->id)
+                                {{-- The owner's role is not a setting: every
+                                     workspace has exactly one, and handing it
+                                     over is a separate decision. --}}
+                                <span class="rounded bg-brand-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand-700 dark:bg-brand-950 dark:text-brand-200">
+                                    Owner
+                                </span>
+                            @elseif ($canManageRoles)
+                                <label class="sr-only" for="role-{{ $member->id }}">Role for {{ $member->name }}</label>
+                                <select id="role-{{ $member->id }}"
+                                        wire:change="changeRole({{ $managing->id }}, {{ $member->id }}, $event.target.value)"
+                                        class="rounded-lg border border-ink-300 px-2 py-1 text-xs font-medium dark:border-ink-700 dark:bg-ink-800">
+                                    <option value="member" @selected($member->pivot->role === 'member')>Member</option>
+                                    <option value="admin" @selected($member->pivot->role === 'admin')>Admin</option>
+                                </select>
+                            @else
+                                <span class="rounded bg-ink-100 px-2 py-0.5 text-[10px] font-medium text-ink-600 dark:bg-ink-800 dark:text-ink-300">
+                                    {{ ucfirst($member->pivot->role) }}
+                                </span>
+                            @endif
+
                             @can('manageMembers', $managing)
                                 @if ($managing->owner_id !== $member->id)
                                     <button wire:click="removeMember({{ $managing->id }}, {{ $member->id }})"

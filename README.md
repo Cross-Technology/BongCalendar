@@ -39,6 +39,23 @@ npm run build      # or: npm run dev
 php artisan serve
 ```
 
+Sessions are configured to last until the user signs out: `SESSION_LIFETIME` is
+30 days and both JWT TTLs are `null`. See [Auth](#auth) for what that means.
+
+Attachments are capped at 5 MB, but **PHP discards a larger upload before Laravel
+sees it** — the stock `upload_max_filesize` is 2M, and a 3 MB file would fail
+with an unhelpful "the file failed to upload". Give PHP some headroom:
+
+```ini
+; php.ini
+upload_max_filesize = 8M
+post_max_size = 12M
+```
+
+The editor quotes whichever limit is actually in force
+(`Attachment::effectiveMaxKilobytes()`), so it never promises 5 MB on a server
+that will not carry it.
+
 Seeded logins (password `password` for all):
 
 | Email | Role |
@@ -78,9 +95,35 @@ workspace other than the caller's active one; without it the user's `current_ten
 |---|---|---|
 | POST | `/auth/register` | Creates the user, a starter workspace and a default calendar. Returns a token. |
 | POST | `/auth/login` | Returns a token. |
-| POST | `/auth/refresh` | Exchanges the current token for a fresh one. |
-| POST | `/auth/logout` | Invalidates the token. |
+| POST | `/auth/refresh` | Exchanges the current token for a fresh one. Optional — see below. |
+| POST | `/auth/logout` | Revokes the token. The only thing that ends a session. |
 | GET | `/auth/me` | Current user with their workspaces. |
+
+**Sessions last until sign-out.** `JWT_TTL` and `JWT_REFRESH_TTL` are both
+`null`, so an issued token carries no `exp` claim and never ages out — a client
+holds the token it was given and `expires_in` comes back as `null`, meaning
+"don't schedule a refresh against this". `/auth/refresh` still works, on a token
+of any age, for clients that would rather rotate than keep one forever.
+
+Signing out is what ends it: `POST /auth/logout` adds the token to the JWT
+blacklist, which handles a token with no expiry by revoking it permanently. The
+browser works the same way — sign-in always sets a remember-me cookie, and
+`Auth::logout()` cycles the token behind it.
+
+Two things worth knowing about that trade:
+
+- **A leaked token is valid until someone signs that device out.** There is no
+  expiry to save you. If a device is lost, sign out on it — or change the user's
+  password and rotate `JWT_SECRET`, which invalidates every token at once.
+- **The blacklist lives in the cache store** (`CACHE_STORE=database`, so it
+  survives restarts). `php artisan cache:clear` wipes it, which would make every
+  previously signed-out token valid again. Clear tags or specific keys instead of
+  flushing the whole cache on a running system.
+
+`config/jwt.php` carries two edits that make this work: `ttl`/`refresh_ttl`
+preserve `null` through the cast (`(int) null` is `0`, which would expire every
+token instantly), and `exp` is off `required_claims`, since the validator would
+otherwise reject the very tokens it is asked to issue.
 
 ### Workspaces
 
@@ -90,7 +133,18 @@ workspace other than the caller's active one; without it the user's `current_ten
 | GET / PATCH / DELETE | `/workspaces/{tenant}` |
 | POST | `/workspaces/{tenant}/switch` |
 | GET / POST | `/workspaces/{tenant}/members` |
+| PATCH | `/workspaces/{tenant}/members/{user}` |
 | DELETE | `/workspaces/{tenant}/members/{user}` |
+
+**Roles.** Every membership is `owner`, `admin` or `member`. Admins may invite
+and remove people; only the **owner** may change what someone is allowed to do —
+`PATCH /workspaces/{tenant}/members/{user}` with `{"role": "admin" | "member"}`.
+That ability is held tighter than the rest on purpose: an admin who could
+appoint admins could promote themselves past the owner.
+
+The owner's own role is not assignable through it. A workspace has exactly one
+owner, and handing that over is a different decision from granting admin
+rights — so `owner` is rejected as a role, and the owner's row is refused.
 
 ### Calendars (tenant-scoped)
 
@@ -123,6 +177,53 @@ default (`visibility: tenant`); its author can keep it to themselves with
 | POST | `/notes` | `body` is required; `title`, `color`, `visibility` and `is_pinned` are optional. |
 | GET / PATCH / DELETE | `/notes/{note}` | Editing is the author's, or an admin's on a *shared* note. Only the author changes `visibility`. |
 | POST | `/notes/{note}/pin` | Toggles, or takes `{"is_pinned": true\|false}`. |
+| POST | `/notes/{note}/attachments` | `multipart/form-data` with `file`. |
+| GET / DELETE | `/attachments/{attachment}` | Streams or removes one file. |
+
+Note bodies are **rich text**: `body` is sanitised HTML and `body_text` its
+plain-text rendering, used for search and previews. Both go through
+`RichTextService`, which reports share — see [Rich text and attachments](#rich-text-and-attachments).
+
+### Reports (tenant-scoped)
+
+One report per department per day, written in a rich-text editor. Any member of
+the workspace can write or correct a department's report; deleting the record of
+a day stays with its author or an admin.
+
+| Method | Route | Notes |
+|---|---|---|
+| GET | `/reports` | `?date=`, `?from=&to=`, `?department_id=`, `?q=` (searches the plain-text rendering). Newest day first, paginated. |
+| GET | `/reports/daily` | `?date=` — every department with its report or `null`, plus `reported` / `missing` counts. Answers "who still owes a report today?", which the index cannot: a department that never reported has no row. |
+| POST | `/reports` | `department_id`, `report_date`, `body`. An **upsert** — posting twice for a day corrects that day rather than failing on the unique index. `201` on the first write, `200` after. |
+| GET / PATCH / DELETE | `/reports/{report}` | PATCH takes `body` only; the department and the day are fixed at creation. |
+
+### Rich text and attachments
+
+Reports and notes are both written in a rich-text editor (Trix), and both store
+sanitised HTML in `body` alongside a plain-text `body_text` used for search and
+previews — searching the markup would match tag names and miss any phrase a bold
+tag happens to split.
+
+**HTML is sanitised on the way in, never on the way out.** Bodies are user input
+rendered back as markup to a whole workspace, so everything funnels through
+`RichTextService` and the `rich_text` HTMLPurifier profile in
+`config/purifier.php` — an allowlist of exactly what the editor emits. `script`,
+`img`, `iframe`, `on*` handlers, inline CSS and `javascript:` URLs do not survive
+it. Nothing but `RichTextService` should write those columns.
+
+**Attachments** (notes today; the table is polymorphic, so reports are the
+obvious next one) accept PDF, Word, Excel and ordinary images up to **5 MB**.
+SVG is deliberately excluded: it is a script-carrying document browsers render,
+which would undo the sanitising everywhere else. `mimes:` validates by sniffing
+the contents, so an HTML page renamed `.png` is refused.
+
+Files live on the **private** `local` disk and are never served off the
+filesystem. The stored path is generated (`attachments/{tenant}/{Y}/{m}/{ulid}.ext`)
+and the uploader's filename is kept for display only, so a crafted name buys
+nothing. Every read goes through `AttachmentController@download`, which checks
+`AttachmentPolicy` — an attachment is exactly as private as the note it hangs
+off — and sends `X-Content-Type-Options: nosniff`, showing images and PDFs
+inline and pushing everything else to disk.
 
 ### Example
 
@@ -145,12 +246,83 @@ curl -s localhost:8000/api/v1/events \
 | `/calendars` | Calendar CRUD, visibility, colour, and sharing with workspace members. |
 | `/workspaces` | Create and switch workspaces, manage members and roles. |
 | `/notes` | Workspace noticeboard: write, search, filter, pin and colour notes. Search and filter live in the URL. |
+| `/reports` | Daily report per department: step through days, see who has reported and who has not, write in a rich-text editor. |
 | `/invitations` | Accept / maybe / decline invitations. |
 
 Livewire's update endpoint does not re-run a page route's custom middleware, so components
 resolve the active workspace themselves through `App\Livewire\Concerns\InteractsWithTenant`
 rather than trusting the `ResolveTenant` middleware from the initial page load. The middleware
 still guards the API, where every request is independently authenticated.
+
+## Progressive web app
+
+BongCalendar installs to a phone or tablet home screen and runs without browser
+chrome. Android and desktop Chrome read `public/manifest.webmanifest`; iOS
+ignores the manifest for installs and reads the `apple-*` meta tags in the
+layout instead, so both sets are present.
+
+| File | Role |
+|---|---|
+| `public/manifest.webmanifest` | Name, colours, icons, and Calendar/Tasks/Notes shortcuts. |
+| `public/sw.js` | Service worker. Registered from `resources/js/app.js`, production builds only. |
+| `public/offline.html` | Offline fallback. Self-contained — no build assets, since it must render with no network. |
+| `public/logo.png` | The brand mark every icon is generated from. |
+| `public/icons/` | Generated icon set. Committed, so a deploy does not need ImageMagick. |
+| `scripts/generate-icons.sh` | Regenerates every icon from one source image. |
+
+### What the service worker does and does not cache
+
+The app is server-rendered, authenticated and multi-tenant, so the rule is
+**never serve one person's HTML to another**:
+
+- **Pages** are fetched from the network every time and are never written to a
+  cache. Offline falls back to `offline.html` rather than a stale dashboard
+  belonging to whoever logged in last.
+- **`/build/` assets** are cached first and served from cache. Vite
+  content-hashes them, so a hit is always correct, and new markup references new
+  filenames that miss the cache — a deploy cannot leave a tab on an old bundle.
+  That is also why there is no update-and-reload prompt.
+- **Non-GET requests are never intercepted.** Livewire updates and form posts go
+  straight to the network; caching or replaying them would corrupt state.
+- **`/livewire`, `/api`, `/login`, `/logout` and `/register` are never touched.**
+
+Bump `VERSION` in `public/sw.js` to retire every previously cached response.
+
+### Regenerating the icons
+
+Every icon comes from `public/logo.png`. After changing it, re-run the generator
+and commit the result:
+
+```bash
+./scripts/generate-icons.sh public/logo.png
+```
+
+It writes `public/icons/` and `public/favicon.ico`, and fails loudly rather than
+emitting a blank or broken set. Three things it handles that are easy to get
+wrong by hand:
+
+- **Flat backgrounds are stripped.** The mark is a rounded white card exported
+  onto solid black. Left alone that black survives as four hard triangles on
+  every icon, so when all four corners share a colour (within a tolerance — the
+  downscale shifts each corner by a point or two) it is flood-filled to
+  transparency. Flood fill only reaches the connected border region, so artwork
+  of the same colour *inside* the mark is untouched. Pass `--keep-background` to
+  skip this.
+- **Maskable icons are cut past the card's corner radius, then inset.** Android
+  crops these to a circle, squircle or teardrop and only the middle 80% is
+  guaranteed to survive. The stripped card also leaves a faint anti-aliased edge
+  that reads as a grey ring once flattened onto white, so the outer 15% is
+  cropped away first — enough to clear the corner curve, which a smaller crop
+  would only trade for four nicks.
+- **Apple touch icons are flattened onto white.** iOS applies its own rounded
+  mask and does not composite transparency; a transparent corner renders black.
+
+SVG sources need `rsvg-convert` (`brew install librsvg`) — ImageMagick's own SVG
+renderer silently drops strokes and transforms and returns an empty square.
+
+`tests/Feature/PwaTest.php` checks that every icon the manifest promises exists
+at the size it claims, and that the icons which cannot carry transparency are
+fully opaque.
 
 ## Tests
 

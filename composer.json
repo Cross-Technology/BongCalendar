@@ -10,6 +10,7 @@
         "laravel/framework": "^13.8",
         "laravel/tinker": "^3.0",
         "livewire/livewire": "^4.4",
+        "mews/purifier": "^3.4",
         "php-open-source-saver/jwt-auth": "^2.9"
     },
     "require-dev": {

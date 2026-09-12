@@ -8,10 +8,12 @@ use App\Http\Controllers\Api\DeviceController;
 use App\Http\Controllers\Api\EventController;
 use App\Http\Controllers\Api\InvitationController;
 use App\Http\Controllers\Api\NoteController;
+use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TaskTemplateController;
 use App\Http\Controllers\Api\TenantController;
 use App\Http\Controllers\Api\WorkspaceInvitationController;
+use App\Http\Controllers\AttachmentController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -66,6 +68,7 @@ Route::prefix('v1')->group(function () {
         Route::delete('workspaces/{tenant}/invitations/{invitation}', [WorkspaceInvitationController::class, 'destroy']);
         Route::post('workspaces/{tenant}/invite-code', [WorkspaceInvitationController::class, 'regenerateCode']);
         Route::post('workspaces/{tenant}/members', [TenantController::class, 'addMember']);
+        Route::patch('workspaces/{tenant}/members/{user}', [TenantController::class, 'updateMemberRole']);
         Route::delete('workspaces/{tenant}/members/{user}', [TenantController::class, 'removeMember']);
 
         // Everything below resolves a workspace first.
@@ -87,6 +90,17 @@ Route::prefix('v1')->group(function () {
             // on its own, without resubmitting the note.
             Route::apiResource('notes', NoteController::class)->names('api.notes');
             Route::post('notes/{note}/pin', [NoteController::class, 'pin']);
+
+            // Files hanging off a note. Reads are streamed through the policy —
+            // the disk is private, so there is no URL to share around.
+            Route::post('notes/{note}/attachments', [AttachmentController::class, 'storeForNote']);
+            Route::get('attachments/{attachment}', [AttachmentController::class, 'download']);
+            Route::delete('attachments/{attachment}', [AttachmentController::class, 'destroy']);
+
+            // Daily department reports. `daily` is declared before the
+            // resource so /reports/daily is not swallowed by /reports/{report}.
+            Route::get('reports/daily', [ReportController::class, 'daily']);
+            Route::apiResource('reports', ReportController::class)->names('api.reports');
 
             Route::apiResource('tasks', TaskController::class)->names('api.tasks');
             // Status is its own endpoint: it is the one field with a side

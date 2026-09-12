@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AttachmentController;
 use App\Models\Tenant;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -18,6 +19,11 @@ Route::middleware('auth')->group(function () {
     Route::livewire('/departments', 'pages::departments')->name('departments.index');
     Route::livewire('/tasks', 'pages::tasks')->name('tasks.index');
     Route::livewire('/notes', 'pages::notes')->name('notes.index');
+    Route::livewire('/reports', 'pages::reports')->name('reports.index');
+
+    // Attachments live on a private disk, so every read is authorised here
+    // rather than served straight off the filesystem.
+    Route::get('/attachments/{attachment}', [AttachmentController::class, 'download'])->name('attachments.download');
     Route::livewire('/invitations', 'pages::invitations')->name('invitations.index');
     Route::livewire('/workspaces', 'pages::workspaces')->name('workspaces.index');
 

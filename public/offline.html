@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Offline — BongCalendar</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<meta name="theme-color" content="#ffffff">
+<style>
+    /* Self-contained on purpose: this page has to render with no network and
+       no build assets, so nothing here is imported. Colours mirror the app's
+       ink/brand tokens. */
+    :root {
+        --bg: #f7f8fa;
+        --panel: #ffffff;
+        --border: #e2e5ec;
+        --text: #161b24;
+        --muted: #6b7383;
+        --brand: #5b4ae0;
+    }
+
+    [data-theme='dark'] {
+        --bg: #0d1017;
+        --panel: #161b24;
+        --border: #232935;
+        --text: #eef0f4;
+        --muted: #98a0b0;
+        --brand: #8781f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    .card {
+        width: 100%;
+        max-width: 24rem;
+        padding: 40px 28px;
+        text-align: center;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+    }
+
+    .badge {
+        display: grid;
+        place-items: center;
+        width: 56px;
+        height: 56px;
+        margin: 0 auto 20px;
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--brand) 12%, transparent);
+        color: var(--brand);
+    }
+
+    h1 { margin: 0 0 8px; font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+    p  { margin: 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
+
+    button {
+        margin-top: 24px;
+        padding: 12px 24px;
+        font: inherit;
+        font-size: 14px;
+        font-weight: 700;
+        color: #fff;
+        background: var(--brand);
+        border: 0;
+        border-radius: 12px;
+        cursor: pointer;
+    }
+
+    button:active { transform: scale(0.97); }
+</style>
+</head>
+<body>
+    <main class="card">
+        <span class="badge" aria-hidden="true">
+            <svg width="28" height="28" viewBox="0 0 20 20" fill="none" stroke="currentColor"
+                 stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2.75" y="4.25" width="14.5" height="13" rx="3"/>
+                <path d="M2.75 8.25h14.5M6.75 2.75v3M13.25 2.75v3"/>
+            </svg>
+        </span>
+
+        <h1>You're offline</h1>
+        <p>BongCalendar needs a connection to load your workspace. Your calendars, tasks and notes are safe — reconnect and they'll be right here.</p>
+
+        <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+
+    <script>
+        // Match the theme the user chose in the app.
+        var dark = localStorage.getItem('theme') === 'dark';
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.querySelector('meta[name="theme-color"]').content = dark ? '#0d1017' : '#ffffff';
+
+        // Slip straight back in the moment the network returns.
+        addEventListener('online', function () { location.reload(); });
+    </script>
+</body>
+</html>

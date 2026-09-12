@@ -7,11 +7,41 @@
 
         <title>{{ $title ?? config('app.name') }}</title>
 
+        {{-- Installable on phone and tablet. --}}
+        <link rel="manifest" href="/manifest.webmanifest">
+        <meta name="theme-color" content="#ffffff">
+        <meta name="application-name" content="{{ config('app.name') }}">
+        <meta name="mobile-web-app-capable" content="yes">
+
+        {{-- iOS ignores the manifest for installs and reads these instead. --}}
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="default">
+        <meta name="apple-mobile-web-app-title" content="{{ config('app.name') }}">
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+        <link rel="apple-touch-icon" sizes="152x152" href="/icons/apple-touch-icon-152.png">
+        <link rel="apple-touch-icon" sizes="167x167" href="/icons/apple-touch-icon-167.png">
+        <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180.png">
+
+        <link rel="icon" href="/favicon.ico" sizes="any">
+        <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png">
+        <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+
         <script>
             // Applied before first paint so the page never flashes the wrong theme.
             // Light is the default; dark is opt-in and remembered per browser.
-            document.documentElement.dataset.theme =
-                localStorage.getItem('theme') === 'dark' ? 'dark' : 'light';
+            (function () {
+                var dark = localStorage.getItem('theme') === 'dark';
+
+                document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+
+                // Installed on a phone, this colours the status bar and the
+                // window chrome, so it has to track the chosen theme.
+                var meta = document.querySelector('meta[name="theme-color"]');
+
+                if (meta) {
+                    meta.content = dark ? '#0d1017' : '#ffffff';
+                }
+            })();
         </script>
 
         @vite(['resources/css/app.css', 'resources/js/app.js'])
@@ -146,6 +176,7 @@
                                 ['route' => 'dashboard', 'label' => 'Calendar', 'icon' => 'calendar'],
                                 ['route' => 'tasks.index', 'label' => 'Tasks', 'icon' => 'check', 'badge' => $openTasks],
                                 ['route' => 'notes.index', 'label' => 'Notes', 'icon' => 'note'],
+                                ['route' => 'reports.index', 'label' => 'Reports', 'icon' => 'report'],
                                 ['route' => 'invitations.index', 'label' => 'Invitations', 'icon' => 'inbox', 'badge' => $pendingInvites],
                             ];
                         @endphp
@@ -236,6 +267,12 @@
                                  this.theme = value;
                                  document.documentElement.dataset.theme = value;
                                  localStorage.setItem('theme', value);
+
+                                 var meta = document.querySelector('meta[name=\'theme-color\']');
+
+                                 if (meta) {
+                                     meta.content = value === 'dark' ? '#0d1017' : '#ffffff';
+                                 }
                              },
                          }">
                         <div class="flex gap-1 rounded-xl bg-ink-100 p-1 dark:bg-ink-800">
@@ -253,7 +290,7 @@
                     </div>
 
                     {{-- Account card --}}
-                    <div x-data="{ open: false }" class="relative border-t border-ink-200/80 p-3 dark:border-ink-800">
+                    <div x-data="{ open: false }" class="pwa-inset-bottom relative border-t border-ink-200/80 p-3 dark:border-ink-800">
                         <div x-show="open" x-on:click.outside="open = false" x-transition.origin.bottom.left x-cloak
                              class="absolute inset-x-3 bottom-full mb-1 overflow-hidden rounded-xl border border-ink-200 bg-white p-1 shadow-lg shadow-ink-900/5 dark:border-ink-700 dark:bg-ink-800">
                             <p class="truncate px-2.5 py-1.5 text-[13px] text-ink-400">{{ $user->email }}</p>
@@ -285,7 +322,7 @@
                 {{-- ───────────────────────────── Content ───────────────────────────── --}}
                 <div class="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-y-auto">
                     {{-- Mobile bar: the sidebar is off-canvas below lg --}}
-                    <div class="sticky top-0 z-20 flex items-center gap-3 border-b border-ink-200/80 bg-white/85 px-4 py-3 backdrop-blur lg:hidden dark:border-ink-800 dark:bg-ink-900/85">
+                    <div class="pwa-inset-top sticky top-0 z-20 flex items-center gap-3 border-b border-ink-200/80 bg-white/85 px-4 py-3 backdrop-blur lg:hidden dark:border-ink-800 dark:bg-ink-900/85">
                         <button type="button" x-on:click="mobileNav = true" aria-label="Open menu"
                                 class="grid size-9 place-items-center rounded-xl border border-ink-200 text-ink-600 dark:border-ink-700 dark:text-ink-300">
                             <svg class="size-[18px]" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg>
@@ -305,7 +342,7 @@
                         </div>
                     @endif
 
-                    <main class="flex-1 px-4 py-5 sm:px-8 sm:py-7">
+                    <main class="pwa-inset-bottom flex-1 px-4 py-5 sm:px-8 sm:py-7">
                         {{ $slot }}
                     </main>
                 </div>

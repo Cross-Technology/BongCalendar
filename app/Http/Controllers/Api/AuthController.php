@@ -114,7 +114,9 @@ class AuthController extends Controller
         return response()->json([
             'access_token' => $token,
             'token_type' => 'bearer',
-            'expires_in' => config('jwt.ttl') * 60,
+            // null when tokens do not expire: the client should hold this one
+            // until sign-out rather than scheduling a refresh against it.
+            'expires_in' => config('jwt.ttl') === null ? null : config('jwt.ttl') * 60,
             'user' => new UserResource($user->load('tenants')),
         ], $status);
     }

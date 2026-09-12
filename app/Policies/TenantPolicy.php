@@ -27,4 +27,14 @@ class TenantPolicy
     {
         return $user->isTenantAdmin($tenant->id);
     }
+
+    /**
+     * Changing what a member is allowed to do. Held tighter than
+     * manageMembers: an admin who could appoint admins could promote
+     * themselves past the owner, so only the owner reshapes the roster.
+     */
+    public function manageRoles(User $user, Tenant $tenant): bool
+    {
+        return $tenant->owner_id === $user->id;
+    }
 }
