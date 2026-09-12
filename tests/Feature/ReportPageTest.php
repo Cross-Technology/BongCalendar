@@ -144,11 +144,11 @@ class ReportPageTest extends TestCase
     }
 
     /**
-     * An existing body is handed to the editor through an HTML attribute, so
-     * its quotes and apostrophes have to survive the trip — otherwise the
-     * attribute closes early and the markup around it falls apart.
+     * The editor reads the body from Livewire at mount rather than from a
+     * rendered attribute. That keeps quotes and apostrophes out of the markup
+     * entirely, and means a reused element cannot show stale text.
      */
-    public function test_an_existing_body_is_loaded_into_the_editor_safely(): void
+    public function test_an_existing_body_is_not_baked_into_the_markup(): void
     {
         $body = '<p>She said "it\'s done" &amp; left</p><ul><li>one</li></ul>';
 
@@ -167,9 +167,15 @@ class ReportPageTest extends TestCase
             ->assertSet('form_body', $body)
             ->html();
 
-        // The raw quotes must not appear inside the x-data attribute.
-        $this->assertStringContainsString('x-data="quillEditor(', $html);
-        $this->assertStringNotContainsString('quillEditor(\'form_body\', \'<p>She said "', $html);
+        preg_match('/x-data="(quillEditor\([^"]*\))"/', $html, $matches);
+
+        $this->assertNotEmpty($matches, 'The editor should carry an x-data attribute.');
+
+        // The body never travels through the DOM — the editor reads it from
+        // Livewire at mount, so there is no attribute to break or go stale.
+        // (It still appears elsewhere on the page, in the row's excerpt.)
+        $this->assertStringNotContainsString('She said', $matches[1]);
+        $this->assertStringNotContainsString('&lt;p&gt;', $matches[1]);
     }
 
     public function test_a_report_opens_in_a_read_dialog(): void

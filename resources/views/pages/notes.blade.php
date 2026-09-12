@@ -736,7 +736,6 @@ class extends Component
                             <span class="{{ $labelClass }}">Note</span>
                             <x-rich-text-editor
                                 model="form_body"
-                                :value="$form_body"
                                 placeholder="Write it down…"
                                 key="note-editor-{{ $editingId ?? 'new' }}-{{ $editorSession }}" />
 

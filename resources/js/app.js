@@ -12,6 +12,24 @@ const loadQuill = (() => {
     return () => (pending ??= import('quill').then((module) => module.default));
 })();
 
+/**
+ * Alpine has no teardown for Quill, and Quill 2 ships no destroy().
+ *
+ * That matters because Quill routes every document `selectionchange` to every
+ * `.ql-container` on the page. A dialog that closes leaves its editor behind
+ * for a moment, and events dispatched to that dead instance throw
+ * "Cannot read properties of null (reading 'offset')" — inside a forEach, so
+ * the live editor stops being updated too. Dropping the class takes the dead
+ * one out of that list.
+ */
+const retireEditor = (container) => {
+    container?.classList.remove('ql-container');
+
+    if (container) {
+        delete container.dataset.quillMounted;
+    }
+};
+
 /*
  * What the editor is allowed to produce.
  *
@@ -23,92 +41,180 @@ const loadQuill = (() => {
 const FORMATS = ['bold', 'italic', 'strike', 'header', 'blockquote', 'code-block', 'list', 'link'];
 
 document.addEventListener('alpine:init', () => {
-    window.Alpine.data('quillEditor', (model, value = '', placeholder = '') => ({
-        quill: null,
+    /*
+     * The Quill instance lives in a closure, NOT on the Alpine component.
+     *
+     * Alpine makes component data deeply reactive, so assigning the editor onto
+     * the component hands back a Proxy. Quill compares objects by identity internally —
+     * `blot.offset(this.scroll)` walks parents looking for the very same scroll
+     * object — and a proxied scroll never matches the raw one its blots hold.
+     * The lookup returns null and every selection read throws
+     * "Cannot read properties of null (reading 'offset')": the editor shows its
+     * text and styles it, but takes no typing and saves nothing.
+     *
+     * Only `failed` stays on the component, because x-show has to react to it.
+     */
+    window.Alpine.data('quillEditor', (model, placeholder = '') => {
+        let quill = null;
+        let lastRange = null;
+        let queued = [];
+        let syncQueued = false;
 
-        /** Where the cursor was, so inserts land there and not at the top. */
-        lastRange: null,
+        return {
+            failed: false,
 
-        /** Anything asked for before Quill finished loading. */
-        queued: [],
+            async mount() {
+                const host = this.$refs.editor;
 
-        async mount() {
-            const Quill = await loadQuill();
-
-            this.quill = new Quill(this.$refs.editor, {
-                placeholder,
-                formats: FORMATS,
-                modules: { toolbar: this.$refs.toolbar },
-            });
-
-            if (value) {
-                // 'silent' so restoring the saved body is not itself an edit.
-                this.quill.clipboard.dangerouslyPasteHTML(value, 'silent');
-            }
-
-            this.quill.on('text-change', () => {
-                // Third argument false: store the value without a round trip.
-                // Re-rendering on every keystroke would be wasteful and, behind
-                // wire:ignore, out of step with what is on screen.
-                this.$wire.set(model, this.html(), false);
-            });
-
-            // Clicking a button outside the editor blurs it and clears Quill's
-            // selection, so the last real cursor position is remembered here.
-            this.quill.on('selection-change', (range) => {
-                if (range) {
-                    this.lastRange = range;
+                // Claim the element before the first await, so a second
+                // initialisation cannot race past this guard and build a
+                // second editor on the same node.
+                if (!host || host.dataset.quillMounted === 'true') {
+                    return;
                 }
-            });
 
-            // Quill loads asynchronously; anything clicked in the meantime was
-            // parked rather than dropped.
-            this.queued.splice(0).forEach((html) => this.insert(html));
-        },
+                host.dataset.quillMounted = 'true';
 
-        /**
-         * Quill 2 renders *both* list types in the DOM as <ul> with the real
-         * type hidden on `li[data-list]`. Saving innerHTML would therefore
-         * turn every numbered list into bullets once the sanitiser dropped
-         * that attribute. getSemanticHTML() emits proper <ol>/<ul> instead.
-         */
-        html() {
-            if (!this.quill) {
-                return '';
-            }
+                let Quill;
 
-            // An untouched editor still holds "<p><br></p>", which is markup
-            // but not a report.
-            return this.quill.getText().trim() === '' ? '' : this.quill.getSemanticHTML().trim();
-        },
+                try {
+                    Quill = await loadQuill();
+                } catch {
+                    // The chunk did not arrive. Fall back to a plain textarea
+                    // rather than leaving a dead box nobody can type into.
+                    this.failed = true;
 
-        /**
-         * Writes markup in at the cursor — a task pulled into a report, or a
-         * self-filling field dropped into a header.
-         */
-        insert(html) {
-            if (!html) {
-                return;
-            }
+                    return;
+                }
 
-            if (!this.quill) {
-                this.queued.push(html);
+                /*
+                 * Snow is the theme Quill actually supports; the base one
+                 * leaves the toolbar half-wired. It overwrites button contents
+                 * with its own icons, so ours are put back afterwards.
+                 */
+                const icons = new Map();
 
-                return;
-            }
+                this.$refs.toolbar.querySelectorAll('button').forEach((button) => {
+                    icons.set(button, button.innerHTML);
+                });
 
-            // End of the document when nothing has been clicked yet. getLength()
-            // counts Quill's trailing newline, hence the -1.
-            const index = this.lastRange?.index ?? Math.max(this.quill.getLength() - 1, 0);
+                quill = new Quill(host, {
+                    theme: 'snow',
+                    placeholder,
+                    formats: FORMATS,
+                    modules: { toolbar: this.$refs.toolbar },
+                });
 
-            this.quill.clipboard.dangerouslyPasteHTML(index, html, 'user');
+                icons.forEach((html, button) => {
+                    button.innerHTML = html;
+                });
 
-            // dangerouslyPasteHTML moves the cursor silently, so selection-change
-            // does not fire and lastRange would otherwise go stale.
-            this.lastRange = this.quill.getSelection() ?? { index: this.quill.getLength() - 1, length: 0 };
-            this.quill.focus();
-        },
-    }));
+                // Handlers before the content is loaded: if loading ever throws,
+                // the editor must still sync what gets typed afterwards.
+                quill.on('text-change', () => this.scheduleSync());
+
+                quill.on('selection-change', (range, previous) => {
+                    if (range) {
+                        lastRange = range;
+                    } else if (previous) {
+                        // Losing focus is a second chance to push the latest text.
+                        this.scheduleSync();
+                    }
+                });
+
+                try {
+                    // Read the body from Livewire rather than from an attribute
+                    // rendered earlier, so a reused element cannot show stale text.
+                    const initial = this.$wire.get(model) ?? '';
+
+                    if (initial) {
+                        quill.setContents(quill.clipboard.convert({ html: initial, text: '' }));
+                    }
+                } catch (error) {
+                    console.error('Could not load the saved content into the editor.', error);
+                }
+
+                // Anything clicked while the chunk was still loading.
+                queued.splice(0).forEach((html) => this.insert(html));
+            },
+
+            destroy() {
+                const host = this.$refs.editor;
+
+                // Only retire an editor that is genuinely gone: Alpine also
+                // calls destroy when re-initialising a live element, and
+                // releasing the claim there would allow a second Quill.
+                if (host && !host.isConnected) {
+                    retireEditor(host);
+                    quill = null;
+                }
+            },
+
+            /** Hands the current markup to Livewire without a round trip. */
+            sync() {
+                this.$wire.set(model, this.html(), false);
+            },
+
+            /** Queues a sync for after Quill has finished its own update. */
+            scheduleSync() {
+                if (syncQueued) {
+                    return;
+                }
+
+                syncQueued = true;
+
+                queueMicrotask(() => {
+                    syncQueued = false;
+
+                    if (quill) {
+                        this.sync();
+                    }
+                });
+            },
+
+            /**
+             * Quill 2 renders *both* list types in the DOM as <ul> with the real
+             * type hidden on `li[data-list]`. Saving innerHTML would turn every
+             * numbered list into bullets once the sanitiser dropped that
+             * attribute; getSemanticHTML() emits proper <ol>/<ul>.
+             */
+            html() {
+                if (!quill) {
+                    return '';
+                }
+
+                // An untouched editor still holds "<p><br></p>", which is markup
+                // but not a report.
+                return quill.getText().trim() === '' ? '' : quill.getSemanticHTML().trim();
+            },
+
+            /** Writes markup in at the cursor — a task pulled into a report. */
+            insert(html) {
+                if (!html) {
+                    return;
+                }
+
+                if (!quill) {
+                    queued.push(html);
+
+                    return;
+                }
+
+                const index = lastRange?.index ?? Math.max(quill.getLength() - 1, 0);
+
+                try {
+                    quill.clipboard.dangerouslyPasteHTML(index, html, 'user');
+                    lastRange = quill.getSelection() ?? { index: quill.getLength() - 1, length: 0 };
+                    quill.focus();
+                } catch (error) {
+                    console.error('Could not write that into the editor.', error);
+                }
+
+                // Whatever happened to the cursor, what is on screen is the truth.
+                this.sync();
+            },
+        };
+    });
 });
 
 /*

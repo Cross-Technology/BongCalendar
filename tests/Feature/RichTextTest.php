@@ -71,9 +71,14 @@ class RichTextTest extends TestCase
 
         $this->assertMatchesRegularExpression('/\.rich-editor__toolbar button \{[^}]*width: 2rem/s', $css);
 
+        // Scoped under .rich-editor so they outrank snow's two-class
+        // selectors (.ql-toolbar.ql-snow), which would otherwise win.
+        $this->assertStringContainsString('.rich-editor .rich-editor__toolbar', $css);
+        $this->assertStringContainsString('.rich-editor .ql-toolbar.ql-snow', $css);
+
         // The applied-at-the-cursor state has to be visible.
         $this->assertStringContainsString('.rich-editor__toolbar button.ql-active', $css);
-        $this->assertStringContainsString("[data-theme='dark'] .rich-editor__toolbar button", $css);
+        $this->assertStringContainsString('.rich-editor .rich-editor__toolbar button', $css);
     }
 
     /**
@@ -161,6 +166,139 @@ class RichTextTest extends TestCase
 
         $this->assertStringContainsString('getSemanticHTML', $js);
         $this->assertStringNotContainsString('root.innerHTML', $js);
+    }
+
+    /**
+     * The change handler must be registered before the saved body is loaded.
+     *
+     * Loading it ends in Quill calling setSelection(), which can throw in a
+     * dialog that has only just been inserted. With the handler registered
+     * afterwards, that throw skipped it: the text was on screen and the
+     * toolbar worked, so the editor looked healthy — but nothing ever synced,
+     * and saving wrote the old body straight back and closed without
+     * complaint. Creating was unaffected, because there was nothing to load.
+     */
+    public function test_the_editor_listens_before_it_loads(): void
+    {
+        $js = file_get_contents(resource_path('js/app.js'));
+
+        $listens = strpos($js, "quill.on('text-change'");
+        $loads = strpos($js, 'dangerouslyPasteHTML');
+
+        $this->assertNotFalse($listens, 'The editor should listen for changes.');
+        $this->assertNotFalse($loads, 'The editor should load the saved body.');
+
+        $this->assertLessThan(
+            $loads,
+            $listens,
+            'Registering the change handler after loading means a failed load silently stops the editor syncing.',
+        );
+
+        // And the load itself must not be able to take the editor down.
+        $this->assertMatchesRegularExpression(
+            '/try \{\s*\n[^}]*dangerouslyPasteHTML/s',
+            $js,
+            'Loading the saved body should be guarded.',
+        );
+    }
+
+    /**
+     * Loading the saved body must not ask Quill to move the cursor.
+     *
+     * dangerouslyPasteHTML() finishes with setSelection(), which reads the
+     * browser's selection before a freshly opened dialog has settled and
+     * throws "Cannot read properties of null (reading 'offset')".
+     * convert() + setContents() loads the same markup and never touches it.
+     */
+    public function test_loading_the_saved_body_does_not_move_the_cursor(): void
+    {
+        $js = file_get_contents(resource_path('js/app.js'));
+
+        $this->assertStringContainsString('clipboard.convert(', $js);
+        $this->assertStringContainsString('setContents(quill.clipboard.convert(', $js);
+        $this->assertStringNotContainsString('dangerouslyPasteHTML(initial', $js);
+    }
+
+    /**
+     * Two Quills on one node is what makes every selection read throw: the
+     * second builds its document from markup the first already owns, so
+     * scroll.find() starts returning null.
+     */
+    public function test_the_editor_cannot_be_mounted_twice_onto_one_element(): void
+    {
+        $js = file_get_contents(resource_path('js/app.js'));
+        $template = file_get_contents(resource_path('views/components/rich-text-editor.blade.php'));
+
+        // Belt: mount() bails if the element already holds an editor.
+        // Belt: the element is claimed before the first await, so a second
+        // initialisation cannot race past the guard.
+        $this->assertStringContainsString("host.dataset.quillMounted = 'true';", $js);
+        $this->assertStringContainsString("dataset.quillMounted === 'true'", $js);
+
+        // Braces: wire:ignore on the Alpine root, so Livewire never morphs it
+        // and Alpine never re-initialises it in the first place.
+        $this->assertMatchesRegularExpression(
+            '/<div wire:ignore\s+wire:key="\{\{ \$key \}\}"\s+x-data="quillEditor/',
+            $template,
+            'wire:ignore must sit on the same element as x-data.',
+        );
+    }
+
+    /**
+     * Quill routes every document selectionchange to every `.ql-container` on
+     * the page. A dialog that closes leaves its editor behind for a moment,
+     * and dispatching to that dead instance throws inside a forEach — which
+     * stops the live editor updating too. Retiring the container on teardown
+     * takes it out of that list.
+     */
+    public function test_a_closed_editor_is_retired(): void
+    {
+        $js = file_get_contents(resource_path('js/app.js'));
+
+        $this->assertStringContainsString('destroy()', $js);
+        $this->assertStringContainsString("classList.remove('ql-container')", $js);
+    }
+
+    /**
+     * The base theme leaves the toolbar half-wired — clicking a button calls
+     * quill.focus() into a selection it cannot resolve — and never builds the
+     * link dialog. Snow is the configuration the library supports.
+     */
+    public function test_the_editor_uses_the_supported_theme(): void
+    {
+        $js = file_get_contents(resource_path('js/app.js'));
+        $css = file_get_contents(resource_path('css/app.css'));
+
+        $this->assertStringContainsString("theme: 'snow'", $js);
+        $this->assertStringContainsString('quill/dist/quill.snow.css', $css);
+
+        // Snow overwrites button contents with its own icons, so ours are
+        // captured beforehand and put back.
+        $this->assertStringContainsString('icons.set(button, button.innerHTML)', $js);
+    }
+
+    /**
+     * The editor instance must not live on the Alpine component.
+     *
+     * Alpine makes component data deeply reactive, so assigning it there hands
+     * back a Proxy. Quill compares objects by identity internally —
+     * `blot.offset(scroll)` walks parents looking for the very same scroll
+     * object — and a proxied scroll never matches the raw one its blots hold.
+     * The lookup returns null and every selection read throws
+     * "Cannot read properties of null (reading 'offset')": the editor shows its
+     * text and even styles it, but takes no typing and saves nothing.
+     */
+    public function test_the_editor_is_kept_out_of_alpine_reactive_data(): void
+    {
+        $js = file_get_contents(resource_path('js/app.js'));
+
+        $this->assertStringContainsString('let quill = null;', $js);
+
+        $this->assertStringNotContainsString(
+            'this.quill',
+            $js,
+            'The Quill instance must live in a closure, never on the reactive component.',
+        );
     }
 
     /**

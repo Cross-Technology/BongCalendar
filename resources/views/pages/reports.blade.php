@@ -624,7 +624,6 @@ class extends Component
                     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                         <x-rich-text-editor
                             model="form_body"
-                            :value="$form_body"
                             placeholder="What happened today?"
                             key="report-editor-{{ $writingDepartment->id }}-{{ $date }}-{{ $editorSession }}" />
 

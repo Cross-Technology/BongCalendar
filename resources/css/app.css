@@ -1,5 +1,5 @@
 @import 'tailwindcss';
-@import 'quill/dist/quill.core.css';
+@import 'quill/dist/quill.snow.css';
 
 /*
  * Theme is an explicit choice, never inherited from the OS: light is the
@@ -149,14 +149,47 @@
  * The rich-text editor: a plain toolbar bar sitting on top of the writing area,
  * the two reading as one control.
  *
- * Only Quill's *core* stylesheet is imported — the "snow" theme brings its own
- * chrome, which would have to be undone to match the app. The toolbar markup is
- * ours (components/rich-text-editor.blade.php); Quill only fills the buttons
- * with icons and keeps `ql-active` in step with the cursor.
+ * Quill's "snow" theme is loaded because it is the configuration the library
+ * actually supports — the base theme leaves the toolbar half-wired and never
+ * builds the link dialog. Snow's own chrome is overridden here, which is why
+ * every rule is scoped under `.rich-editor`: snow's selectors carry two
+ * classes (`.ql-toolbar.ql-snow`) and would otherwise win.
  *
- * Unlayered like the rules above, so these beat Tailwind's preflight.
+ * Unlayered like the rules above, so these also beat Tailwind's preflight.
  */
-.rich-editor__toolbar {
+.rich-editor .ql-toolbar.ql-snow,
+.rich-editor .ql-container.ql-snow {
+    border: 0;
+    font-family: inherit;
+}
+
+/* Snow's link dialog, dressed as one of the app's popovers. */
+.rich-editor .ql-snow .ql-tooltip {
+    border-radius: 0.75rem;
+    border-color: var(--color-ink-200);
+    box-shadow: 0 10px 24px rgb(22 27 36 / 0.12);
+    color: var(--color-ink-700);
+}
+
+.rich-editor .ql-snow .ql-tooltip input[type='text'] {
+    border-radius: 0.5rem;
+    border-color: var(--color-ink-200);
+    padding: 0.25rem 0.5rem;
+}
+
+[data-theme='dark'] .rich-editor .ql-snow .ql-tooltip {
+    background: var(--color-ink-800);
+    border-color: var(--color-ink-700);
+    color: var(--color-ink-100);
+}
+
+[data-theme='dark'] .rich-editor .ql-snow .ql-tooltip input[type='text'] {
+    background: var(--color-ink-900);
+    border-color: var(--color-ink-700);
+    color: var(--color-ink-100);
+}
+
+.rich-editor .rich-editor__toolbar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -168,18 +201,18 @@
     padding: 0.3125rem;
 }
 
-.rich-editor__group {
+.rich-editor .rich-editor__group {
     display: flex;
     align-items: center;
     gap: 0.125rem;
     padding: 0 0.25rem;
 }
 
-.rich-editor__group + .rich-editor__group {
+.rich-editor .rich-editor__group + .rich-editor__group {
     border-left: 1px solid var(--color-ink-200);
 }
 
-.rich-editor__toolbar button {
+.rich-editor .rich-editor__toolbar button {
     display: grid;
     place-items: center;
     width: 2rem;
@@ -202,44 +235,44 @@
  * loaded — without these the toolbar renders as a row of empty squares that
  * only appear when hovered.
  */
-.rich-editor__toolbar button svg {
+.rich-editor .rich-editor__toolbar button svg {
     width: 1.125rem;
     height: 1.125rem;
 }
 
-.rich-editor__glyph {
+.rich-editor .rich-editor__glyph {
     font-size: 0.875rem;
     font-weight: 700;
     line-height: 1;
 }
 
-.rich-editor__glyph--bold {
+.rich-editor .rich-editor__glyph--bold {
     font-weight: 800;
 }
 
 /* A serif italic reads as italic at this size; the sans one barely leans. */
-.rich-editor__glyph--italic {
+.rich-editor .rich-editor__glyph--italic {
     font-family: Georgia, 'Times New Roman', serif;
     font-style: italic;
     font-weight: 600;
 }
 
-.rich-editor__glyph--strike {
+.rich-editor .rich-editor__glyph--strike {
     text-decoration: line-through;
 }
 
-.rich-editor__toolbar button:hover {
+.rich-editor .rich-editor__toolbar button:hover {
     background: var(--color-ink-200);
     color: var(--color-ink-900);
 }
 
-.rich-editor__toolbar button:focus-visible {
+.rich-editor .rich-editor__toolbar button:focus-visible {
     outline: 2px solid var(--color-brand-500);
     outline-offset: 1px;
 }
 
 /* Applied at the cursor — a light highlight, so it reads as a pressed toggle. */
-.rich-editor__toolbar button.ql-active {
+.rich-editor .rich-editor__toolbar button.ql-active {
     background: var(--color-brand-100);
     color: var(--color-brand-700);
 }
@@ -269,25 +302,25 @@
 
 /* ── Dark theme ─────────────────────────────────────────────────────────── */
 
-[data-theme='dark'] .rich-editor__toolbar {
+[data-theme='dark'] .rich-editor .rich-editor__toolbar {
     border-color: var(--color-ink-700);
     background: var(--color-ink-900);
 }
 
-[data-theme='dark'] .rich-editor__group + .rich-editor__group {
+[data-theme='dark'] .rich-editor .rich-editor__group + .rich-editor__group {
     border-left-color: var(--color-ink-700);
 }
 
-[data-theme='dark'] .rich-editor__toolbar button {
+[data-theme='dark'] .rich-editor .rich-editor__toolbar button {
     color: var(--color-ink-300);
 }
 
-[data-theme='dark'] .rich-editor__toolbar button:hover {
+[data-theme='dark'] .rich-editor .rich-editor__toolbar button:hover {
     background: var(--color-ink-700);
     color: #fff;
 }
 
-[data-theme='dark'] .rich-editor__toolbar button.ql-active {
+[data-theme='dark'] .rich-editor .rich-editor__toolbar button.ql-active {
     background: var(--color-brand-900);
     color: var(--color-brand-100);
 }
