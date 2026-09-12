@@ -320,7 +320,7 @@
                 </aside>
 
                 {{-- ───────────────────────────── Content ───────────────────────────── --}}
-                <div class="flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-y-auto">
+                <div class="app-scroll flex min-w-0 flex-1 flex-col lg:h-screen lg:overflow-y-auto">
                     {{-- Mobile bar: the sidebar is off-canvas below lg --}}
                     <div class="pwa-inset-top sticky top-0 z-20 flex items-center gap-3 border-b border-ink-200/80 bg-white/85 px-4 py-3 backdrop-blur lg:hidden dark:border-ink-800 dark:bg-ink-900/85">
                         <button type="button" x-on:click="mobileNav = true" aria-label="Open menu"

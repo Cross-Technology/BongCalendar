@@ -146,6 +146,23 @@
 }
 
 /*
+ * While a dialog is open nothing behind it may scroll. Two scrollers can move:
+ * the document on a phone, and `.app-scroll` — the content column, which owns
+ * the scrollbar from `lg` up. Both are pinned here.
+ *
+ * Done in CSS rather than by toggling a class from Alpine, because a dialog
+ * that Livewire removes mid-request would otherwise leave the page locked with
+ * nothing left to run the cleanup. `:has()` simply stops matching.
+ */
+body:has([data-modal]) {
+    overflow: hidden;
+}
+
+body:has([data-modal]) .app-scroll {
+    overflow: hidden;
+}
+
+/*
  * The rich-text editor: a plain toolbar bar sitting on top of the writing area,
  * the two reading as one control.
  *

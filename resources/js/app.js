@@ -230,7 +230,11 @@ document.addEventListener('alpine:init', () => {
  */
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch(() => {
+        // `updateViaCache: 'none'` keeps the worker script itself out of the
+        // HTTP cache. Without it a browser may go on serving a cached /sw.js
+        // for up to a day, so a deployed change to the caching rules would sit
+        // unapplied on devices that already had the app installed.
+        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {
             // Blocked by the browser, private mode, or an insecure origin.
         });
     });

@@ -522,6 +522,45 @@ class NotePageTest extends TestCase
         $this->actingAs($this->owner)->get('/notes?page=2')->assertOk();
     }
 
+    /**
+     * A long note used to open in a panel taller than the screen, with its
+     * buttons off the bottom. The panel is capped against the overlay, and the
+     * overlay is sized from the *visible* viewport rather than from `inset-0`,
+     * which on a phone measures past the browser chrome.
+     */
+    public function test_the_read_dialog_is_capped_to_the_visible_viewport(): void
+    {
+        $note = Note::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'author_id' => $this->owner->id,
+            'body' => '<p>'.str_repeat('A long note. ', 400).'</p>',
+        ]);
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::notes')
+            ->call('openNote', $note->id)
+            ->assertSeeHtml('h-dvh')
+            ->assertSeeHtml('max-h-full');
+    }
+
+    /** An open dialog must pin both scrollers behind it — see app.css. */
+    public function test_an_open_dialog_marks_itself_so_the_page_behind_stops_scrolling(): void
+    {
+        $note = Note::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'author_id' => $this->owner->id,
+        ]);
+
+        $board = Livewire::actingAs($this->owner)->test('pages::notes');
+
+        $board->assertDontSeeHtml('data-modal');
+
+        $board->call('openNote', $note->id)->assertSeeHtml('data-modal');
+        $board->call('closeNote')->assertDontSeeHtml('data-modal');
+
+        $board->call('edit', $note->id)->assertSeeHtml('data-modal');
+    }
+
     public function test_the_page_requires_authentication(): void
     {
         $this->get('/notes')->assertRedirect('/login');

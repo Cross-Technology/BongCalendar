@@ -308,6 +308,26 @@ resolve the active workspace themselves through `App\Livewire\Concerns\Interacts
 rather than trusting the `ResolveTenant` middleware from the initial page load. The middleware
 still guards the API, where every request is independently authenticated.
 
+## Deploying
+
+```bash
+./scripts/deploy.sh
+```
+
+Run it on the server once the new code is in place. It installs dependencies,
+builds the front end, migrates, and rebuilds the caches.
+
+**If a page still renders its old version after a deploy, it is almost always
+one of these two**, and both are what the script exists to prevent:
+
+| Cause | Why it bites | Fix |
+|---|---|---|
+| `public/build/` is gitignored | Pulling code brings no CSS or JS, so the server keeps serving the bundle it last built | `npm run build` |
+| Compiled Blade under `storage/framework/views/` | Blade recompiles by comparing file times. A deploy that writes `.blade.php` files with *older* timestamps — `rsync -t`, an unpacked archive, a restored checkout — makes the stale compile look current, and the previous page goes on being served | `php artisan view:clear` |
+
+Neither is a browser cache: the service worker never stores HTML (see below), so
+a hard reload cannot fix either one and does not tell you anything when it fails.
+
 ## Progressive web app
 
 BongCalendar installs to a phone or tablet home screen and runs without browser

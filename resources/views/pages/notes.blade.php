@@ -608,13 +608,20 @@ class extends Component
 
     {{-- Read view: the note in full, however long it runs --}}
     @if ($viewingNote)
-        <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
+        <div data-modal
+             class="fixed inset-0 z-50 grid h-dvh place-items-end overflow-hidden bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
              x-on:keydown.escape.window="$wire.closeNote()"
              wire:click.self="closeNote">
-            {{-- Capped and split into three: only the note body scrolls, so the
-                 heading and the actions stay reachable on a short screen. --}}
+            {{-- Split into three, with only the note body scrolling, so the
+                 heading and the actions stay reachable on a short screen.
+
+                 The height cap is `max-h-full` against an `h-dvh` overlay, not
+                 a dvh fraction of its own: on a phone the browser chrome eats
+                 into the viewport, and a panel sized from `vh` — or from `dvh`
+                 while its parent is sized from the large viewport — hangs off
+                 the bottom of the screen with its buttons out of reach. --}}
             <div style="--note-color: {{ $viewingNote->color }}"
-                 class="note-card flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
+                 class="note-card flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
                 <header class="flex shrink-0 items-start gap-3 px-6 pt-5 pb-3">
                     <div class="min-w-0 flex-1">
                         <h2 class="break-words text-xl font-extrabold leading-tight tracking-tight">
@@ -676,7 +683,7 @@ class extends Component
                     @endif
                 </div>
 
-                <footer class="flex shrink-0 flex-wrap items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">
+                <footer class="pwa-inset-bottom flex shrink-0 flex-wrap items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">
                     @can('update', $viewingNote)
                         <button type="button" wire:click="togglePin({{ $viewingNote->id }})"
                                 class="rounded-xl border border-ink-200 px-3 py-2 text-[13px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
@@ -709,15 +716,16 @@ class extends Component
 
     {{-- Full editor: titles, pinning, and every edit --}}
     @if ($showModal)
-        <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
+        <div data-modal
+             class="fixed inset-0 z-50 grid h-dvh place-items-end overflow-hidden bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
              wire:key="note-dialog-{{ $editingId ?? 'new' }}-{{ $editorSession }}"
              x-on:keydown.escape.window="$wire.set('showModal', false)"
              wire:click.self="$set('showModal', false)">
-            {{-- Capped at the viewport with only the fields scrolling. Without
-                 this the form runs past the bottom of a short screen and the
-                 Save button becomes unreachable. --}}
+            {{-- Capped at the overlay, which is the visible viewport, with only
+                 the fields scrolling. Without this the form runs past the
+                 bottom of a short screen and Save becomes unreachable. --}}
             <div style="--note-color: {{ $form_color }}"
-                 class="note-card flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
+                 class="note-card flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
                 <form wire:submit="save" class="flex min-h-0 flex-1 flex-col">
                     <header class="flex shrink-0 items-center justify-between px-6 pt-5 pb-4">
                         <h2 class="text-lg font-bold tracking-tight">{{ $editingId ? 'Edit note' : 'New note' }}</h2>
@@ -837,7 +845,7 @@ class extends Component
                         </label>
                     </div>
 
-                    <footer class="mt-2 flex shrink-0 items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">
+                    <footer class="pwa-inset-bottom mt-2 flex shrink-0 items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">
                         <div class="ml-auto flex gap-2">
                             <button type="button" wire:click="$set('showModal', false)"
                                     class="rounded-xl border border-ink-200 px-4 py-2.5 text-[14px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
