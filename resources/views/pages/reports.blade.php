@@ -29,11 +29,6 @@ class extends Component
 
     public string $form_body = '';
 
-    /** Department whose header is being designed; that dialog is open while set. */
-    public ?int $headerDepartmentId = null;
-
-    public string $header_body = '';
-
     /**
      * Bumped every time an editor is opened, and folded into its wire:key.
      *
@@ -196,9 +191,7 @@ class extends Component
             return null;
         }
 
-        // department.tenant because the header's {{workspace}} field reads it;
-        // without it every report with a header costs an extra query.
-        $report = Report::with(['author', 'lastEditor', 'department.tenant'])->find($this->viewingId);
+        $report = Report::with(['author', 'lastEditor', 'department'])->find($this->viewingId);
 
         if (! $report || $this->currentUser()->cannot('view', $report)) {
             $this->viewingId = null;
@@ -264,49 +257,6 @@ class extends Component
         $this->form_body = '';
 
         session()->flash('status', 'Report saved.');
-    }
-
-    /* -------------------------------------------------------------- headers */
-
-    /**
-     * The header belongs to the department, and the people who write its
-     * reports are the ones who decide how it looks — see
-     * DepartmentPolicy::manageReportHeader.
-     */
-    public function editHeader(int $departmentId): void
-    {
-        $department = Department::forTenant($this->requireTenant()->id)->findOrFail($departmentId);
-
-        $this->authorize('manageReportHeader', $department);
-
-        $this->resetValidation();
-        // One dialog at a time — and only one editor on the page at once.
-        $this->writingDepartmentId = null;
-        $this->viewingId = null;
-        $this->editorSession++;
-        $this->headerDepartmentId = $department->id;
-        $this->header_body = (string) $department->report_header;
-    }
-
-    public function cancelHeader(): void
-    {
-        $this->headerDepartmentId = null;
-        $this->header_body = '';
-        $this->resetValidation();
-    }
-
-    public function saveHeader(ReportService $reports): void
-    {
-        $department = Department::forTenant($this->requireTenant()->id)->findOrFail($this->headerDepartmentId);
-
-        $this->authorize('manageReportHeader', $department);
-
-        $reports->saveHeader($department, $this->header_body);
-
-        $this->headerDepartmentId = null;
-        $this->header_body = '';
-
-        session()->flash('status', 'Header saved.');
     }
 
     /* ------------------------------------------------- pulling tasks across */
@@ -389,32 +339,6 @@ class extends Component
             'writingDepartment' => $this->writingDepartmentId
                 ? Department::forTenant($this->requireTenant()->id)->find($this->writingDepartmentId)
                 : null,
-            'headerDepartment' => $this->headerDepartmentId
-                ? Department::forTenant($this->requireTenant()->id)->find($this->headerDepartmentId)
-                : null,
-            'headerFields' => ReportService::HEADER_FIELDS,
-            // What each field turns into, shown beside the field itself —
-            // being told `{{date}}` is "the day being reported on" is weaker
-            // than being shown "Friday, 12 September 2026".
-            'headerExamples' => $this->headerDepartmentId
-                ? app(ReportService::class)->headerValues(
-                    Department::forTenant($this->requireTenant()->id)->with('tenant')->find($this->headerDepartmentId),
-                    $this->day(),
-                    $this->currentUser(),
-                )
-                : [],
-            // Rendered with their fields filled, so both dialogs show the
-            // header exactly as a reader will see it.
-            'viewingHeader' => $viewing
-                ? app(ReportService::class)->renderHeader($viewing->department, $viewing->report_date, $viewing->author)
-                : '',
-            'writingHeader' => $this->writingDepartmentId
-                ? app(ReportService::class)->renderHeader(
-                    Department::forTenant($this->requireTenant()->id)->with('tenant')->find($this->writingDepartmentId),
-                    $this->day(),
-                    $this->currentUser(),
-                )
-                : '',
             'writingTasks' => $this->writingDepartmentId
                 ? ($this->tasksByDepartment()->get((int) $this->writingDepartmentId) ?? collect())
                 : collect(),
@@ -493,13 +417,6 @@ class extends Component
                         <span class="size-3 shrink-0 rounded-full" style="background-color: {{ $department->color }}"></span>
 
                         <h2 class="min-w-0 flex-1 truncate text-[16px] font-bold tracking-tight">{{ $department->name }}</h2>
-
-                        @can('manageReportHeader', $department)
-                            <button type="button" wire:click="editHeader({{ $department->id }})"
-                                    class="rounded-lg px-2.5 py-1 text-[12px] font-bold text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 dark:text-ink-400 dark:hover:bg-ink-800 dark:hover:text-ink-100">
-                                {{ $department->report_header ? 'Header' : 'Design header' }}
-                            </button>
-                        @endcan
 
                         @if ($report)
                             <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
@@ -618,15 +535,6 @@ class extends Component
                      through the `report` HTMLPurifier profile before it is
                      stored, and nothing else writes this column. --}}
                 <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                    @if ($viewingHeader !== '')
-                        {{-- The department's own header, with its fields filled
-                             in. Stored once and rendered here rather than typed
-                             into the body, so every day's report matches. --}}
-                        <div class="rich-text mb-5 border-b border-ink-200/70 pb-4 text-ink-700 dark:border-ink-800 dark:text-ink-200">
-                            {!! $viewingHeader !!}
-                        </div>
-                    @endif
-
                     <div class="rich-text text-ink-700 dark:text-ink-200">{!! $viewingReport->body !!}</div>
                 </div>
 
@@ -646,75 +554,6 @@ class extends Component
         </div>
     @endif
 
-    {{-- Header designer: the department's own styling for its reports --}}
-    @if ($headerDepartment)
-        <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
-             wire:key="header-dialog-{{ $headerDepartment->id }}-{{ $editorSession }}"
-             x-on:keydown.escape.window="$wire.cancelHeader()">
-            <div class="flex max-h-[94dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
-                <header class="flex shrink-0 items-center gap-3 border-b border-ink-200/80 px-6 py-4 dark:border-ink-800">
-                    <span class="size-3 shrink-0 rounded-full" style="background-color: {{ $headerDepartment->color }}"></span>
-                    <div class="min-w-0 flex-1">
-                        <h2 class="truncate text-lg font-bold tracking-tight">{{ $headerDepartment->name }} header</h2>
-                        <p class="text-[12px] text-ink-400">Sits above every report this department files.</p>
-                    </div>
-                    <button type="button" wire:click="cancelHeader" aria-label="Close"
-                            class="grid size-8 shrink-0 place-items-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 dark:hover:bg-ink-800">✕</button>
-                </header>
-
-                <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                    {{-- Fields fill themselves in when the header is rendered,
-                         so the date and the author never need retyping. --}}
-                    <div class="mb-3">
-                        <p class="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-400">
-                            Fields that fill themselves in
-                        </p>
-                        <div class="flex flex-wrap gap-1.5">
-                            @foreach ($headerFields as $field => $explanation)
-                                {{-- Inserted in the browser rather than through
-                                     the server: dropping a 14-character token
-                                     should not cost a round trip, and it lands
-                                     wherever the cursor was. --}}
-                                <button type="button"
-                                        x-on:click="$dispatch('rich-text-insert', { html: @js($field) })"
-                                        title="{{ $explanation }}"
-                                        class="flex items-center gap-1.5 rounded-lg border border-ink-200 px-2.5 py-1 text-[12px] transition hover:border-brand-300 hover:bg-brand-50 dark:border-ink-700 dark:hover:border-brand-700 dark:hover:bg-brand-950">
-                                    <span class="font-mono font-bold text-ink-700 dark:text-ink-200">{{ $field }}</span>
-                                    {{-- headerValues() escapes for markup; decoded here so it displays as written. --}}
-                                    <span class="text-ink-400">→ {{ html_entity_decode($headerExamples[$field] ?? '', ENT_QUOTES | ENT_HTML5) }}</span>
-                                </button>
-                            @endforeach
-                        </div>
-                    </div>
-
-                    <x-rich-text-editor
-                        model="header_body"
-                        :value="$header_body"
-                        :placeholder="'e.g. {{department}} — Daily Report'"
-                        key="header-editor-{{ $headerDepartment->id }}-{{ $editorSession }}"
-                        min-height="8rem" />
-
-                    <p class="mt-2 text-[12px] text-ink-400">
-                        Leave it empty to go back to no header.
-                    </p>
-                </div>
-
-                <footer class="flex shrink-0 items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">
-                    <div class="ml-auto flex gap-2">
-                        <button type="button" wire:click="cancelHeader"
-                                class="rounded-xl border border-ink-200 px-4 py-2.5 text-[14px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
-                            Cancel
-                        </button>
-                        <button type="button" wire:click="saveHeader"
-                                class="rounded-xl bg-brand-600 px-5 py-2.5 text-[14px] font-bold text-white shadow-sm shadow-brand-600/25 transition hover:bg-brand-700 active:scale-95">
-                            Save header
-                        </button>
-                    </div>
-                </footer>
-            </div>
-        </div>
-    @endif
-
     {{-- Editor: tasks on the left, the report on the right --}}
     @if ($writingDepartment)
         <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
@@ -727,13 +566,6 @@ class extends Component
                         <h2 class="truncate text-lg font-bold tracking-tight">{{ $writingDepartment->name }}</h2>
                         <p class="text-[12px] text-ink-400">Report for {{ $this->day()->format('l, j F Y') }}</p>
                     </div>
-
-                    @can('manageReportHeader', $writingDepartment)
-                        <button type="button" wire:click="editHeader({{ $writingDepartment->id }})"
-                                class="shrink-0 rounded-xl border border-ink-200 px-3 py-1.5 text-[13px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
-                            {{ $writingDepartment->report_header ? 'Edit header' : 'Design header' }}
-                        </button>
-                    @endcan
 
                     <button type="button" wire:click="cancelWriting" aria-label="Close"
                             class="grid size-8 shrink-0 place-items-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 dark:hover:bg-ink-800">✕</button>
@@ -790,16 +622,6 @@ class extends Component
                     @endif
 
                     <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                        @if ($writingHeader !== '')
-                            {{-- What a reader will see above this report. Shown
-                                 rather than typed into the body, so it cannot
-                                 drift from one day to the next. --}}
-                            <div class="mb-4 rounded-xl border border-dashed border-ink-200 px-4 py-3 dark:border-ink-700">
-                                <p class="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">Header</p>
-                                <div class="rich-text text-ink-600 dark:text-ink-300">{!! $writingHeader !!}</div>
-                            </div>
-                        @endif
-
                         <x-rich-text-editor
                             model="form_body"
                             :value="$form_body"

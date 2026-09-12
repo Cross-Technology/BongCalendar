@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
  * A grouping of calendars inside a workspace — Sales, Ops, Errands. Calendars
  * may sit outside every department, in which case they read as "ungrouped".
  */
-#[Fillable(['tenant_id', 'name', 'slug', 'description', 'color', 'icon', 'position', 'report_header'])]
+#[Fillable(['tenant_id', 'name', 'slug', 'description', 'color', 'icon', 'position'])]
 class Department extends Model
 {
     use HasFactory, SoftDeletes;

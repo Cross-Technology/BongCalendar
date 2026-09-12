@@ -120,14 +120,6 @@ class SampleDataSeeder extends Seeder
                 $service->addMember($department, $people[$personKey], $role);
             }
 
-            // A header each, so the sample data shows what they are for.
-            if (blank($department->report_header)) {
-                $department->update([
-                    'report_header' => '<h1>{{department}} — Daily Report</h1>'
-                        .'<div>{{date}} · prepared by {{author}} · {{workspace}}</div>',
-                ]);
-            }
-
             $departments[$key] = $department;
         }
 

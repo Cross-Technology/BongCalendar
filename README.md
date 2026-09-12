@@ -163,7 +163,6 @@ rights — so `owner` is rejected as a role, and the owner's row is refused.
 | GET / POST | `/departments` | |
 | GET / PATCH / DELETE | `/departments/{department}` | Admin-only to change. |
 | POST | `/departments/{department}/calendars` | Move a calendar in, or out of every department. |
-| PUT | `/departments/{department}/report-header` | `report_header` (HTML). Send nothing to clear it. Open to the department's members, not just admins. |
 | GET / POST | `/departments/{department}/members` | POST takes `user_id` and an optional `role` of `lead` or `member`. |
 | DELETE | `/departments/{department}/members/{user}` | |
 
@@ -214,18 +213,6 @@ default (`visibility: tenant`); its author can keep it to themselves with
 | POST | `/notes/{note}/pin` | Toggles, or takes `{"is_pinned": true\|false}`. |
 | POST | `/notes/{note}/attachments` | `multipart/form-data` with `file`. |
 | GET / DELETE | `/attachments/{attachment}` | Streams or removes one file. |
-
-**Each department styles its own report header.** It is designed in the same
-editor as a report, stored once on the department, and rendered *above* every
-report it files — never mixed into the body, so it cannot drift day to day.
-Anyone in the department can design it (see `DepartmentPolicy::manageReportHeader`);
-workspace admins can too.
-
-Headers carry fields that fill themselves in at render time — `{{department}}`,
-`{{date}}`, `{{author}}`, `{{workspace}}` — so the date never needs retyping.
-Values are escaped before they go into the stored markup: a department called
-`Sales & <Ops>` reads as text rather than reopening the hole the sanitiser
-closes.
 
 The report editor shows that department's tasks for the day — status, priority,
 checklist progress and assignee — with **Add** on each and **Add all to report**,

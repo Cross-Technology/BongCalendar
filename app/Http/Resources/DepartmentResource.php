@@ -22,8 +22,6 @@ class DepartmentResource extends JsonResource
             'description' => $this->description,
             'color' => $this->color,
             'icon' => $this->icon,
-            // Sanitised HTML; fields such as {{date}} are filled at render time.
-            'report_header' => $this->report_header,
             'position' => $this->position,
             // tenant_id can be absent when the model came from a partial select.
             'can_manage' => $user && $this->tenant_id ? $user->isTenantAdmin($this->tenant_id) : false,

@@ -31,19 +31,6 @@ class DepartmentPolicy
         return $user->isTenantAdmin($department->tenant_id);
     }
 
-    /**
-     * The look of a department's reports belongs to the people who write them,
-     * so any member may design the header — not only workspace admins.
-     */
-    public function manageReportHeader(User $user, Department $department): bool
-    {
-        if (! $user->belongsToTenant($department->tenant_id)) {
-            return false;
-        }
-
-        return $department->hasMember($user) || $user->isTenantAdmin($department->tenant_id);
-    }
-
     /** Who works in a department is part of its shape, so admins decide it. */
     public function manageMembers(User $user, Department $department): bool
     {
