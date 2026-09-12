@@ -78,6 +78,13 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('departments', DepartmentController::class)->names('api.departments');
             Route::post('departments/{department}/calendars', [DepartmentController::class, 'assign']);
 
+            // Who works in a department. Membership scopes work — it decides
+            // where a task lands and what the reports page leads with — rather
+            // than hiding anything from the rest of the workspace.
+            Route::get('departments/{department}/members', [DepartmentController::class, 'members']);
+            Route::post('departments/{department}/members', [DepartmentController::class, 'addMember']);
+            Route::delete('departments/{department}/members/{user}', [DepartmentController::class, 'removeMember']);
+
             Route::apiResource('calendars', CalendarController::class)->names('api.calendars');
             Route::get('calendars/{calendar}/shares', [CalendarController::class, 'shares']);
             Route::post('calendars/{calendar}/shares', [CalendarController::class, 'share']);

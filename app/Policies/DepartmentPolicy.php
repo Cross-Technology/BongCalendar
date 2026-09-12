@@ -30,4 +30,10 @@ class DepartmentPolicy
     {
         return $user->isTenantAdmin($department->tenant_id);
     }
+
+    /** Who works in a department is part of its shape, so admins decide it. */
+    public function manageMembers(User $user, Department $department): bool
+    {
+        return $user->isTenantAdmin($department->tenant_id);
+    }
 }

@@ -56,6 +56,16 @@ The editor quotes whichever limit is actually in force
 (`Attachment::effectiveMaxKilobytes()`), so it never promises 5 MB on a server
 that will not carry it.
 
+Want something to look at? A second seeder fills the workspace with a worked
+example — four departments with people in them, a day of tasks carrying real
+checklists and priorities, and two reports already written:
+
+```bash
+php artisan db:seed --class=SampleDataSeeder
+```
+
+It is deliberately separate from `db:seed`, and safe to re-run.
+
 Seeded logins (password `password` for all):
 
 | Email | Role |
@@ -146,6 +156,30 @@ The owner's own role is not assignable through it. A workspace has exactly one
 owner, and handing that over is a different decision from granting admin
 rights — so `owner` is rejected as a role, and the owner's row is refused.
 
+### Departments (tenant-scoped)
+
+| Method | Route | Notes |
+|---|---|---|
+| GET / POST | `/departments` | |
+| GET / PATCH / DELETE | `/departments/{department}` | Admin-only to change. |
+| POST | `/departments/{department}/calendars` | Move a calendar in, or out of every department. |
+| GET / POST | `/departments/{department}/members` | POST takes `user_id` and an optional `role` of `lead` or `member`. |
+| DELETE | `/departments/{department}/members/{user}` | |
+
+**Department membership scopes work; it does not gate it.** Everyone in the
+workspace still sees every department, its tasks and its reports — membership
+decides where new work lands and what a page leads with. `lead` carries no extra
+permission either; it only breaks the tie when someone belongs to more than one
+department.
+
+**Assigning a task files it.** A task handed to someone who works in a
+department is filed under that department — the one they lead if they are in
+several. It only ever fills a blank: a department chosen deliberately outranks
+the assignee's default, and reassigning never moves a task that already has a
+home. The rule lives in a `saving` hook on `Task`, because tasks are created
+from four places (API, board, template, recurrence) and three would have been
+easy to miss.
+
 ### Calendars (tenant-scoped)
 
 | Method | Route |
@@ -179,6 +213,12 @@ default (`visibility: tenant`); its author can keep it to themselves with
 | POST | `/notes/{note}/pin` | Toggles, or takes `{"is_pinned": true\|false}`. |
 | POST | `/notes/{note}/attachments` | `multipart/form-data` with `file`. |
 | GET / DELETE | `/attachments/{attachment}` | Streams or removes one file. |
+
+The report editor shows that department's tasks for the day — status, priority,
+checklist progress and assignee — with **Add** on each and **Add all to report**,
+which write them into the editor as formatted lines. The day's list also shows a
+per-department task strip, so the page answers "what were they actually doing?"
+without opening anything.
 
 Note bodies are **rich text**: `body` is sanitised HTML and `body_text` its
 plain-text rendering, used for search and previews. Both go through

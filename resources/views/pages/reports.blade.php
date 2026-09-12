@@ -3,6 +3,7 @@
 use App\Livewire\Concerns\InteractsWithTenant;
 use App\Models\Department;
 use App\Models\Report;
+use App\Models\Task;
 use App\Services\ReportService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -28,6 +29,9 @@ class extends Component
 
     public string $form_body = '';
 
+    /** Per-render cache for tasksByDepartment(); never persisted. */
+    protected ?Collection $taskCache = null;
+
     public function mount(): void
     {
         $this->requireTenant();
@@ -51,6 +55,7 @@ class extends Component
         }
 
         $this->viewingId = null;
+        $this->taskCache = null;
     }
 
     /* ----------------------------------------------------------------- days */
@@ -73,12 +78,14 @@ class extends Component
     {
         $this->date = $this->day()->addDays($days)->toDateString();
         $this->viewingId = null;
+        $this->taskCache = null;
     }
 
     public function goToToday(): void
     {
         $this->date = $this->todaysDate();
         $this->viewingId = null;
+        $this->taskCache = null;
     }
 
     public function isToday(): bool
@@ -115,7 +122,39 @@ class extends Component
             ->map(fn (Department $department) => [
                 'department' => $department,
                 'report' => $reports->get($department->id),
+                'tasks' => $this->tasksByDepartment()->get($department->id) ?? collect(),
             ]);
+    }
+
+    /**
+     * The day's tasks for every department at once, so the page answers "what
+     * was this department actually doing?" without a query per row.
+     *
+     * Cached on the instance: rows() and the editor both ask for it during a
+     * single render.
+     *
+     * @return Collection<int, Collection<int, Task>>
+     */
+    public function tasksByDepartment(): Collection
+    {
+        if ($this->taskCache !== null) {
+            return $this->taskCache;
+        }
+
+        $tenant = $this->requireTenant();
+
+        return $this->taskCache = Task::forTenant($tenant->id)
+            ->roots()
+            ->whereNotNull('department_id')
+            ->onCalendarDay($this->day(), $tenant->timezone ?: 'UTC')
+            ->with('assignee:id,name')
+            ->withCount([
+                'checklist',
+                'checklist as checklist_done_count' => fn ($q) => $q->where('completed', true),
+            ])
+            ->boardOrder()
+            ->get()
+            ->groupBy('department_id');
     }
 
     /* ------------------------------------------------------------ read view */
@@ -208,6 +247,63 @@ class extends Component
         session()->flash('status', 'Report saved.');
     }
 
+    /* ------------------------------------------------- pulling tasks across */
+
+    /**
+     * One task, written into the report as a line.
+     *
+     * The markup goes to the browser rather than into $form_body directly:
+     * the editor sits behind wire:ignore, so anything written server-side
+     * would be invisible until the dialog was reopened.
+     */
+    public function insertTask(int $taskId): void
+    {
+        // The counts have to be loaded here too. Without them taskLine() reads
+        // checklist_count as null and quietly drops the progress that "Add all"
+        // includes — the same task, written two different ways.
+        $task = Task::forTenant($this->requireTenant()->id)
+            ->with('assignee:id,name')
+            ->withCount([
+                'checklist',
+                'checklist as checklist_done_count' => fn ($q) => $q->where('completed', true),
+            ])
+            ->findOrFail($taskId);
+
+        $this->dispatch('report-insert', html: $this->taskLine($task));
+    }
+
+    /** Every task for the department being written, as a list. */
+    public function insertAllTasks(): void
+    {
+        $tasks = $this->tasksByDepartment()->get((int) $this->writingDepartmentId) ?? collect();
+
+        if ($tasks->isEmpty()) {
+            return;
+        }
+
+        $items = $tasks->map(fn (Task $task) => '<li>'.$this->taskLine($task, wrap: false).'</li>')->implode('');
+
+        $this->dispatch('report-insert', html: '<ul>'.$items.'</ul>');
+    }
+
+    /** Title, where it got to, and how much of its checklist is ticked. */
+    protected function taskLine(Task $task, bool $wrap = true): string
+    {
+        $bits = [$task->statusMeta()['label'], $task->priorityMeta()['label'].' priority'];
+
+        if ($task->checklist_count > 0) {
+            $bits[] = "{$task->checklist_done_count}/{$task->checklist_count} checklist";
+        }
+
+        if ($task->assignee) {
+            $bits[] = $task->assignee->name;
+        }
+
+        $line = '<strong>'.e($task->title).'</strong> — '.e(implode(' · ', $bits));
+
+        return $wrap ? '<div>'.$line.'</div>' : $line;
+    }
+
     public function deleteReport(int $reportId): void
     {
         $report = Report::findOrFail($reportId);
@@ -229,6 +325,9 @@ class extends Component
             'writingDepartment' => $this->writingDepartmentId
                 ? Department::forTenant($this->requireTenant()->id)->find($this->writingDepartmentId)
                 : null,
+            'writingTasks' => $this->writingDepartmentId
+                ? ($this->tasksByDepartment()->get((int) $this->writingDepartmentId) ?? collect())
+                : collect(),
         ];
     }
 };
@@ -359,6 +458,28 @@ class extends Component
                             </button>
                         </div>
                     @endif
+
+                    @php $tasks = $row['tasks']; @endphp
+                    @if ($tasks->isNotEmpty())
+                        @php $done = $tasks->where('status', 'done')->count(); @endphp
+                        <div class="flex flex-wrap items-center gap-1.5 border-t border-ink-200/70 pt-3 text-[12px] dark:border-ink-800">
+                            <span class="mr-1 font-bold uppercase tracking-wider text-ink-400">
+                                Tasks {{ $done }}/{{ $tasks->count() }}
+                            </span>
+
+                            @foreach ($tasks as $task)
+                                <span class="inline-flex items-center gap-1.5 rounded-full border border-ink-200 py-0.5 pl-1.5 pr-2.5 dark:border-ink-700"
+                                      wire:key="row-task-{{ $task->id }}"
+                                      title="{{ $task->statusMeta()['label'] }} · {{ $task->priorityMeta()['label'] }} priority">
+                                    <span class="size-2 shrink-0 rounded-full" style="background-color: {{ $task->statusMeta()['color'] }}"></span>
+                                    <span class="max-w-[12rem] truncate font-semibold text-ink-600 dark:text-ink-300">{{ $task->title }}</span>
+                                    @if ($task->checklist_count > 0)
+                                        <span class="text-ink-400">{{ $task->checklist_done_count }}/{{ $task->checklist_count }}</span>
+                                    @endif
+                                </span>
+                            @endforeach
+                        </div>
+                    @endif
                 </article>
             @endforeach
         </div>
@@ -435,6 +556,54 @@ class extends Component
                 </header>
 
                 <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                    {{-- What this department was doing, so the report can be
+                         written from it rather than from memory. --}}
+                    @if ($writingTasks->isNotEmpty())
+                        @php $doneCount = $writingTasks->where('status', 'done')->count(); @endphp
+                        <div class="mb-4 rounded-xl border border-ink-200 p-3 dark:border-ink-700">
+                            <div class="mb-2 flex flex-wrap items-center gap-2">
+                                <h3 class="text-[11px] font-bold uppercase tracking-wider text-ink-400">
+                                    Today's tasks · {{ $doneCount }}/{{ $writingTasks->count() }} done
+                                </h3>
+                                <button type="button" wire:click="insertAllTasks"
+                                        class="ml-auto rounded-lg border border-ink-200 px-2.5 py-1 text-[12px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
+                                    Add all to report
+                                </button>
+                            </div>
+
+                            <ul class="flex flex-col gap-1">
+                                @foreach ($writingTasks as $task)
+                                    <li class="flex flex-wrap items-center gap-2 rounded-lg px-2 py-1.5 transition hover:bg-ink-50 dark:hover:bg-ink-800"
+                                        wire:key="edit-task-{{ $task->id }}">
+                                        <span class="size-2 shrink-0 rounded-full" style="background-color: {{ $task->statusMeta()['color'] }}"></span>
+
+                                        <span class="min-w-0 flex-1 truncate text-[13px] font-semibold">{{ $task->title }}</span>
+
+                                        <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold"
+                                              style="background-color: {{ $task->priorityMeta()['color'] }}1a; color: {{ $task->priorityMeta()['color'] }}">
+                                            {{ $task->priorityMeta()['label'] }}
+                                        </span>
+
+                                        @if ($task->checklist_count > 0)
+                                            <span class="shrink-0 text-[12px] text-ink-400">
+                                                {{ $task->checklist_done_count }}/{{ $task->checklist_count }}
+                                            </span>
+                                        @endif
+
+                                        @if ($task->assignee)
+                                            <span class="shrink-0 text-[12px] text-ink-400">{{ $task->assignee->name }}</span>
+                                        @endif
+
+                                        <button type="button" wire:click="insertTask({{ $task->id }})"
+                                                class="shrink-0 rounded-lg px-2 py-1 text-[12px] font-bold text-brand-600 transition hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-950">
+                                            Add
+                                        </button>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
+
                     {{--
                         wire:ignore is load-bearing: Trix rewrites this subtree
                         as the user types, and letting Livewire morph it would

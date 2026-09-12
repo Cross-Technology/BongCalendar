@@ -5,16 +5,23 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\DepartmentRequest;
 use App\Http\Resources\DepartmentResource;
+use App\Http\Resources\UserResource;
 use App\Models\Calendar;
 use App\Models\Department;
+use App\Models\User;
+use App\Services\DepartmentService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Validation\Rule;
 
 class DepartmentController extends Controller
 {
-    public function __construct(protected TenantContext $tenants) {}
+    public function __construct(
+        protected TenantContext $tenants,
+        protected DepartmentService $departments,
+    ) {}
 
     public function index(Request $request): AnonymousResourceCollection
     {
@@ -87,6 +94,47 @@ class DepartmentController extends Controller
         $department->delete();
 
         return response()->json(['message' => 'Department deleted.']);
+    }
+
+    /* ------------------------------------------------------------- members */
+
+    public function members(Department $department): AnonymousResourceCollection
+    {
+        $this->authorize('view', $department);
+
+        return UserResource::collection($department->members()->orderBy('name')->get());
+    }
+
+    public function addMember(Request $request, Department $department): JsonResponse
+    {
+        $this->authorize('manageMembers', $department);
+
+        $data = $request->validate([
+            'user_id' => ['required', 'integer', 'exists:users,id'],
+            'role' => ['nullable', Rule::in(DepartmentService::ROLES)],
+        ]);
+
+        $user = User::findOrFail($data['user_id']);
+
+        try {
+            $this->departments->addMember($department, $user, $data['role'] ?? 'member');
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Added to the department.',
+            'data' => new UserResource($department->members()->whereKey($user->id)->firstOrFail()),
+        ], 201);
+    }
+
+    public function removeMember(Department $department, User $user): JsonResponse
+    {
+        $this->authorize('manageMembers', $department);
+
+        $this->departments->removeMember($department, $user);
+
+        return response()->json(['message' => 'Removed from the department.']);
     }
 
     /** Move a calendar into this department, or out of every department. */

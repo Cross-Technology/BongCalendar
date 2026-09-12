@@ -22,7 +22,12 @@ class UserResource extends JsonResource
             'digest_enabled' => (bool) $this->digest_enabled,
             'digest_morning_hour' => (int) $this->digest_morning_hour,
             'digest_evening_hour' => (int) $this->digest_evening_hour,
+            // Workspace role. Keyed to tenant_user, so it stays absent when the
+            // user arrives through some other pivot.
             'role' => $this->whenPivotLoaded('tenant_user', fn () => $this->pivot->role),
+            // Role within a department — a different pivot, and a different
+            // thing: `lead` decides where a task lands, not what anyone may do.
+            'department_role' => $this->whenPivotLoaded('department_user', fn () => $this->pivot->role),
             'joined_at' => $this->whenPivotLoaded('tenant_user', fn () => $this->pivot->joined_at),
             'tenants' => TenantResource::collection($this->whenLoaded('tenants')),
             'created_at' => $this->created_at,

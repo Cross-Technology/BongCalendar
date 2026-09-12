@@ -3,6 +3,8 @@
 use App\Livewire\Concerns\InteractsWithTenant;
 use App\Models\Calendar;
 use App\Models\Department;
+use App\Models\User;
+use App\Services\DepartmentService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -28,6 +30,9 @@ class extends Component
     /** Palette offered in the modal — the same hues the sidebar dots use. */
     public array $palette = ['#6f5cf0', '#2563eb', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#db2777', '#64748b'];
 
+    /** Pending "add someone" selection, keyed by department id. */
+    public array $newMember = [];
+
     public function mount(): void
     {
         $this->requireTenant();
@@ -52,7 +57,10 @@ class extends Component
                 'calendars' => fn ($q) => $q->whereIn('calendars.id', $visibleIds),
                 'events' => fn ($q) => $q->whereIn('events.calendar_id', $visibleIds),
             ])
-            ->with(['calendars' => fn ($q) => $q->whereIn('calendars.id', $visibleIds)->orderBy('name')])
+            ->with([
+                'calendars' => fn ($q) => $q->whereIn('calendars.id', $visibleIds)->orderBy('name'),
+                'members' => fn ($q) => $q->orderBy('name'),
+            ])
             ->get();
     }
 
@@ -148,6 +156,53 @@ class extends Component
         session()->flash('status', 'Department deleted. Its calendars are now ungrouped.');
     }
 
+    /* ------------------------------------------------------------- people */
+
+    public function addMember(int $departmentId, DepartmentService $departments): void
+    {
+        $department = Department::forTenant($this->requireTenant()->id)->findOrFail($departmentId);
+
+        $this->authorize('manageMembers', $department);
+
+        $userId = (int) ($this->newMember[$departmentId] ?? 0);
+
+        if (! $userId) {
+            return;
+        }
+
+        try {
+            $departments->addMember($department, User::findOrFail($userId));
+        } catch (\InvalidArgumentException $e) {
+            session()->flash('error', $e->getMessage());
+
+            return;
+        }
+
+        $this->newMember[$departmentId] = '';
+    }
+
+    public function setMemberRole(int $departmentId, int $userId, string $role, DepartmentService $departments): void
+    {
+        $department = Department::forTenant($this->requireTenant()->id)->findOrFail($departmentId);
+
+        $this->authorize('manageMembers', $department);
+
+        try {
+            $departments->addMember($department, User::findOrFail($userId), $role);
+        } catch (\InvalidArgumentException $e) {
+            session()->flash('error', $e->getMessage());
+        }
+    }
+
+    public function removeMember(int $departmentId, int $userId, DepartmentService $departments): void
+    {
+        $department = Department::forTenant($this->requireTenant()->id)->findOrFail($departmentId);
+
+        $this->authorize('manageMembers', $department);
+
+        $departments->removeMember($department, User::findOrFail($userId));
+    }
+
     public function moveCalendar(int $calendarId, ?int $departmentId): void
     {
         $tenantId = $this->requireTenant()->id;
@@ -171,6 +226,7 @@ class extends Component
             'departmentList' => $this->departments(),
             'ungroupedCalendars' => $this->ungrouped(),
             'canManage' => $this->canManage(),
+            'workspaceMembers' => $this->currentTenant()->users()->orderBy('name')->get(['users.id', 'users.name']),
         ];
     }
 };
@@ -225,6 +281,69 @@ class extends Component
                     </button>
                 @endif
             </header>
+
+            {{-- Who works here. Scopes work rather than gating it: their tasks
+                 default to this department and the Reports page leads with it,
+                 but nothing is hidden from the rest of the workspace. --}}
+            <div class="mt-3 border-t border-ink-200/70 pt-3 dark:border-ink-800">
+                <h3 class="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-400">
+                    People
+                    @if ($department->members->isNotEmpty())
+                        <span class="font-medium normal-case tracking-normal">· {{ $department->members->count() }}</span>
+                    @endif
+                </h3>
+
+                @if ($department->members->isNotEmpty())
+                    <ul class="flex flex-wrap gap-2">
+                        @foreach ($department->members as $member)
+                            <li class="flex items-center gap-2 rounded-full border border-ink-200 py-1 pl-1.5 pr-1.5 text-[13px] dark:border-ink-700"
+                                wire:key="dept-{{ $department->id }}-member-{{ $member->id }}">
+                                <span class="grid size-6 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-[10px] font-bold text-white">
+                                    {{ \Illuminate\Support\Str::of($member->name)->substr(0, 1)->upper() }}
+                                </span>
+                                <span class="font-semibold">{{ $member->name }}</span>
+
+                                @if ($canManage)
+                                    <select wire:change="setMemberRole({{ $department->id }}, {{ $member->id }}, $event.target.value)"
+                                            aria-label="Role for {{ $member->name }} in {{ $department->name }}"
+                                            class="rounded-full border-0 bg-ink-100 px-2 py-0.5 text-[11px] font-bold dark:bg-ink-800">
+                                        <option value="member" @selected($member->pivot->role === 'member')>Member</option>
+                                        <option value="lead" @selected($member->pivot->role === 'lead')>Lead</option>
+                                    </select>
+                                    <button type="button" wire:click="removeMember({{ $department->id }}, {{ $member->id }})"
+                                            aria-label="Remove {{ $member->name }} from {{ $department->name }}"
+                                            class="grid size-5 place-items-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-red-600 dark:hover:bg-ink-700">✕</button>
+                                @elseif ($member->pivot->role === 'lead')
+                                    <span class="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-bold text-ink-500 dark:bg-ink-800 dark:text-ink-300">Lead</span>
+                                @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                @else
+                    <p class="text-[13px] text-ink-400">Nobody in this department yet.</p>
+                @endif
+
+                @if ($canManage)
+                    @php $available = $workspaceMembers->whereNotIn('id', $department->members->pluck('id')); @endphp
+
+                    @if ($available->isNotEmpty())
+                        <div class="mt-2 flex flex-wrap items-center gap-2">
+                            <label class="sr-only" for="add-member-{{ $department->id }}">Add someone to {{ $department->name }}</label>
+                            <select id="add-member-{{ $department->id }}" wire:model="newMember.{{ $department->id }}"
+                                    class="rounded-xl border border-ink-200 bg-white px-3 py-1.5 text-[13px] dark:border-ink-700 dark:bg-ink-800">
+                                <option value="">Add someone…</option>
+                                @foreach ($available as $candidate)
+                                    <option value="{{ $candidate->id }}">{{ $candidate->name }}</option>
+                                @endforeach
+                            </select>
+                            <button type="button" wire:click="addMember({{ $department->id }})"
+                                    class="rounded-xl bg-brand-600 px-3 py-1.5 text-[13px] font-bold text-white transition hover:bg-brand-700">
+                                Add
+                            </button>
+                        </div>
+                    @endif
+                @endif
+            </div>
 
             @if ($department->calendars->isNotEmpty())
                 <ul class="mt-3 flex flex-wrap gap-2 border-t border-ink-200/70 pt-3 dark:border-ink-800">

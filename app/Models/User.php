@@ -81,6 +81,34 @@ class User extends Authenticatable implements JWTSubject
             ->withTimestamps();
     }
 
+    /**
+     * Departments this user works in, across every workspace.
+     *
+     * @return BelongsToMany<Department, $this>
+     */
+    public function departments(): BelongsToMany
+    {
+        return $this->belongsToMany(Department::class, 'department_user')
+            ->withPivot(['role', 'joined_at'])
+            ->withTimestamps();
+    }
+
+    /**
+     * The department a new piece of work should land in when this user is the
+     * one doing it: the one they lead, otherwise the first they belong to.
+     * Null when they are in none, which is the normal case to begin with.
+     */
+    public function primaryDepartmentId(int $tenantId): ?int
+    {
+        return $this->departments()
+            ->where('departments.tenant_id', $tenantId)
+            ->whereNull('departments.deleted_at')
+            ->orderByRaw("CASE department_user.role WHEN 'lead' THEN 0 ELSE 1 END")
+            ->orderBy('departments.position')
+            ->orderBy('departments.name')
+            ->value('departments.id');
+    }
+
     /** @return HasMany<PushToken, $this> */
     public function pushTokens(): HasMany
     {

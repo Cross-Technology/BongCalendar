@@ -313,6 +313,12 @@ class extends Component
             'priorityMeta' => Task::PRIORITY_META,
             'departmentList' => Department::forTenant($tenantId)->get(),
             'memberList' => $this->currentTenant()->users()->orderBy('name')->get(['users.id', 'users.name']),
+            // Who actually works in the chosen department, so the assignee
+            // picker leads with them instead of the whole workspace.
+            'departmentMemberIds' => $this->form_department_id
+                ? Department::forTenant($tenantId)->find($this->form_department_id)
+                    ?->members()->pluck('users.id')->all() ?? []
+                : [],
             'timezone' => $this->userTimezone(),
             'repeatOptions' => [
                 'daily' => 'Every day',
@@ -536,7 +542,7 @@ class extends Component
                         <div class="grid gap-4 sm:grid-cols-2">
                             <div>
                                 <label class="{{ $label }}">Department</label>
-                                <select wire:model="form_department_id" class="{{ $field }}">
+                                <select wire:model.live="form_department_id" class="{{ $field }}">
                                     <option value="">None</option>
                                     @foreach ($departmentList as $dept)
                                         <option value="{{ $dept->id }}">{{ $dept->name }}</option>
@@ -545,11 +551,29 @@ class extends Component
                             </div>
                             <div>
                                 <label class="{{ $label }}">Assignee</label>
+                                @php
+                                    $inDepartment = $memberList->whereIn('id', $departmentMemberIds);
+                                    $elsewhere = $memberList->whereNotIn('id', $departmentMemberIds);
+                                @endphp
                                 <select wire:model="form_assignee_id" class="{{ $field }}">
                                     <option value="">Unassigned</option>
-                                    @foreach ($memberList as $member)
-                                        <option value="{{ $member->id }}">{{ $member->name }}</option>
-                                    @endforeach
+
+                                    @if ($inDepartment->isNotEmpty())
+                                        <optgroup label="In this department">
+                                            @foreach ($inDepartment as $member)
+                                                <option value="{{ $member->id }}">{{ $member->name }}</option>
+                                            @endforeach
+                                        </optgroup>
+                                        <optgroup label="Everyone else">
+                                            @foreach ($elsewhere as $member)
+                                                <option value="{{ $member->id }}">{{ $member->name }}</option>
+                                            @endforeach
+                                        </optgroup>
+                                    @else
+                                        @foreach ($memberList as $member)
+                                            <option value="{{ $member->id }}">{{ $member->name }}</option>
+                                        @endforeach
+                                    @endif
                                 </select>
                                 @error('form_assignee_id') <p class="mt-1.5 text-[13px] font-medium text-red-600">{{ $message }}</p> @enderror
                             </div>

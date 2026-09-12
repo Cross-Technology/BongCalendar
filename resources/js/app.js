@@ -45,6 +45,27 @@ document.addEventListener('livewire:navigated', watchForEditor);
 addEventListener('trix-file-accept', (event) => event.preventDefault());
 
 /*
+ * Writing a task into the open editor.
+ *
+ * The report page dispatches this rather than setting the Livewire property,
+ * because the editor sits behind wire:ignore — anything written server-side
+ * would not appear until the dialog was reopened. Inserting through Trix's own
+ * API also means the change fires trix-change, so the property stays in step
+ * without anything special.
+ */
+addEventListener('report-insert', (event) => {
+    const element = document.querySelector('trix-editor');
+    const html = event.detail?.html ?? event.detail?.[0]?.html;
+
+    if (!element?.editor || !html) {
+        return;
+    }
+
+    element.focus();
+    element.editor.insertHTML(html);
+});
+
+/*
  * Word-style tooltips.
  *
  * Trix labels its buttons "Bullets", "Numbers", "Increase Level" — accurate,

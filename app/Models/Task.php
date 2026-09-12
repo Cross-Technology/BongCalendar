@@ -4,13 +4,14 @@ namespace App\Models;
 
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
 
 /**
  * A unit of work inside a workspace. Statuses, priorities and their labels
@@ -25,6 +26,27 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 class Task extends Model
 {
     use HasFactory, SoftDeletes;
+
+    protected static function booted(): void
+    {
+        /*
+         * A task handed to someone who works in a department belongs to that
+         * department. Filed here rather than in each caller because tasks are
+         * created from four places — the API, the board, a template and a
+         * recurrence — and three of them would have been easy to miss.
+         *
+         * It only ever fills a blank: a deliberate filing outranks the
+         * assignee's default, and reassigning never moves a task that already
+         * has a home.
+         */
+        static::saving(function (Task $task) {
+            if ($task->department_id !== null || $task->assignee_id === null || $task->tenant_id === null) {
+                return;
+            }
+
+            $task->department_id = User::find($task->assignee_id)?->primaryDepartmentId($task->tenant_id);
+        });
+    }
 
     public const STATUSES = ['todo', 'in_progress', 'done', 'blocked'];
 
@@ -155,7 +177,7 @@ class Task extends Model
      * deadline when no start day was given. Matches the mobile app's rule, so
      * both clients place the same task on the same square.
      */
-    public function calendarDate(): ?\Illuminate\Support\Carbon
+    public function calendarDate(): ?Carbon
     {
         return $this->start_date ?? $this->due_date;
     }
@@ -163,7 +185,7 @@ class Task extends Model
     /** Tasks scheduled for a given local calendar day, by whichever date applies. */
     public function scopeOnCalendarDay(Builder $query, \DateTimeInterface $day, string $timezone): Builder
     {
-        $start = \Carbon\CarbonImmutable::instance($day)->setTimezone($timezone)->startOfDay();
+        $start = CarbonImmutable::instance($day)->setTimezone($timezone)->startOfDay();
         $window = [$start->utc(), $start->endOfDay()->utc()];
 
         return $query->where(fn (Builder $q) => $q
@@ -176,7 +198,7 @@ class Task extends Model
     /** Tasks due on a given local calendar day. */
     public function scopeDueOn(Builder $query, \DateTimeInterface $day, string $timezone): Builder
     {
-        $start = \Carbon\CarbonImmutable::instance($day)->setTimezone($timezone)->startOfDay();
+        $start = CarbonImmutable::instance($day)->setTimezone($timezone)->startOfDay();
 
         return $query->whereBetween('due_date', [$start->utc(), $start->endOfDay()->utc()]);
     }

@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\ChecklistItem;
 use App\Models\Department;
 use App\Models\Report;
+use App\Models\Task;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\WorkspaceService;
@@ -185,6 +187,105 @@ class ReportPageTest extends TestCase
             ->test('pages::reports')
             ->set('date', '2026-02-31')
             ->assertSet('date', now($this->tenant->timezone)->toDateString());
+    }
+
+    /** A task on the report's day, with a part-ticked checklist. */
+    protected function task(string $title = 'Open the shop', string $status = 'in_progress'): Task
+    {
+        $task = Task::create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'created_by' => $this->owner->id,
+            'assignee_id' => $this->owner->id,
+            'title' => $title,
+            'status' => $status,
+            'priority' => 'high',
+            'start_date' => now($this->tenant->timezone)->setTime(9, 0)->toIso8601String(),
+        ]);
+
+        ChecklistItem::create(['task_id' => $task->id, 'title' => 'Unlock', 'completed' => true, 'position' => 0]);
+        ChecklistItem::create(['task_id' => $task->id, 'title' => 'Count float', 'completed' => true, 'position' => 1]);
+        ChecklistItem::create(['task_id' => $task->id, 'title' => 'Fridge temps', 'completed' => false, 'position' => 2]);
+
+        return $task;
+    }
+
+    public function test_the_day_shows_what_each_department_was_working_on(): void
+    {
+        $this->task();
+
+        $this->actingAs($this->owner)
+            ->get('/reports')
+            ->assertOk()
+            ->assertSee('Open the shop')
+            // Two of three checklist items ticked.
+            ->assertSee('2/3');
+    }
+
+    public function test_the_editor_lists_the_days_tasks_with_their_progress(): void
+    {
+        $this->task();
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('startWriting', $this->department->id)
+            ->assertSee('Open the shop')
+            ->assertSee('2/3')
+            ->assertSee('High')
+            ->assertSee('Add all to report');
+    }
+
+    /**
+     * The task goes to the browser as an event, not into the property: the
+     * editor is behind wire:ignore, so a server-side write would be invisible.
+     */
+    public function test_a_task_can_be_written_into_the_report(): void
+    {
+        $task = $this->task();
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('startWriting', $this->department->id)
+            ->call('insertTask', $task->id)
+            ->assertDispatched(
+                'report-insert',
+                fn (string $event, array $params) => str_contains($params['html'], 'Open the shop')
+                    && str_contains($params['html'], 'In Progress')
+                    && str_contains($params['html'], '2/3 checklist'),
+            );
+    }
+
+    public function test_every_task_can_be_written_in_at_once(): void
+    {
+        $this->task('Open the shop');
+        $this->task('Weekly stock count', 'todo');
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('startWriting', $this->department->id)
+            ->call('insertAllTasks')
+            ->assertDispatched(
+                'report-insert',
+                fn (string $event, array $params) => str_starts_with($params['html'], '<ul>')
+                    && str_contains($params['html'], 'Open the shop')
+                    && str_contains($params['html'], 'Weekly stock count'),
+            );
+    }
+
+    /** Titles are user input on their way into markup. */
+    public function test_a_task_title_is_escaped_on_its_way_into_the_report(): void
+    {
+        $task = $this->task('<script>alert(1)</script>');
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('startWriting', $this->department->id)
+            ->call('insertTask', $task->id)
+            ->assertDispatched(
+                'report-insert',
+                fn (string $event, array $params) => ! str_contains($params['html'], '<script>')
+                    && str_contains($params['html'], '&lt;script&gt;'),
+            );
     }
 
     public function test_a_member_cannot_delete_someone_elses_report(): void
