@@ -219,7 +219,7 @@ class extends Component
         }
 
         return Task::forTenant($this->requireTenant()->id)
-            ->with(['department:id,name,color', 'assignee:id,name'])
+            ->with(['department:id,name,color,position', 'assignee:id,name'])
             ->find($this->taskId);
     }
 
@@ -694,7 +694,7 @@ class extends Component
             ->where(fn ($q) => $q
                 ->whereBetween('start_date', $window)
                 ->orWhere(fn ($inner) => $inner->whereNull('start_date')->whereBetween('due_date', $window)))
-            ->with(['department:id,name,color', 'assignee:id,name'])
+            ->with(['department:id,name,color,position', 'assignee:id,name'])
             ->boardOrder()
             ->get() as $task) {
             // The scheduled day wins; the deadline is the fallback, so a task
@@ -727,6 +727,26 @@ class extends Component
             ];
         }
 
+        /*
+         * The day's tasks, gathered under the department they belong to.
+         *
+         * A flat list reads as noise once a workspace has a few departments —
+         * grouping answers "what does Operations owe today?" at a glance.
+         * Departments keep the sidebar's order; anything unfiled sits last.
+         */
+        $selectedTasks = collect($tasksByDay[$selected->format('Y-m-d')] ?? []);
+
+        $taskGroups = $selectedTasks
+            ->groupBy(fn (Task $task) => $task->department_id ?? 0)
+            ->map(fn ($tasks) => [
+                'department' => $tasks->first()->department,
+                'tasks' => $tasks->values(),
+            ])
+            ->sortBy(fn (array $group) => $group['department']
+                ? sprintf('%05d %s', $group['department']->position, $group['department']->name)
+                : '~')
+            ->values();
+
         $activeTask = $this->activeTask();
         $tenantIdForView = $this->requireTenant()->id;
 
@@ -749,7 +769,8 @@ class extends Component
             'dayEvents' => collect($byDay[$selected->format('Y-m-d')] ?? [])
                 ->sortBy(fn (Event $event) => $event->starts_at)
                 ->values(),
-            'dayTasks' => collect($tasksByDay[$selected->format('Y-m-d')] ?? []),
+            'dayTasks' => $selectedTasks,
+            'taskGroups' => $taskGroups,
             'activeTask' => $activeTask,
             'subtasks' => $activeTask
                 ? Task::where('parent_task_id', $activeTask->id)->boardOrder()->get()
@@ -885,68 +906,87 @@ class extends Component
 
         {{-- Tasks due on this day --}}
         @if ($dayTasks->isNotEmpty())
-            <ul class="mb-3 space-y-1 border-b border-ink-200/70 pb-3 dark:border-ink-800">
-                @foreach ($dayTasks as $index => $task)
-                    <li wire:key="day-task-{{ $task->id }}"
-                        class="rise group flex items-center gap-3 rounded-xl px-2 py-2 transition
-                               {{ $activeTask && $activeTask->id === $task->id
-                                   ? 'bg-brand-50 dark:bg-brand-950/60'
-                                   : 'hover:bg-ink-50 dark:hover:bg-ink-800' }}"
-                        style="animation-delay: {{ $index * 40 }}ms">
-                        <button type="button" wire:click="toggleTask({{ $task->id }})"
-                                role="checkbox" aria-checked="{{ $task->isDone() ? 'true' : 'false' }}"
-                                aria-label="{{ $task->isDone() ? 'Reopen' : 'Complete' }} {{ $task->title }}"
-                                class="grid size-[18px] shrink-0 place-items-center rounded-full border-2 transition"
-                                style="{{ $task->isDone()
-                                    ? 'background-color: '.$statusMeta['done']['color'].'; border-color: '.$statusMeta['done']['color']
-                                    : 'border-color: '.$task->statusMeta()['color'] }}">
-                            @if ($task->isDone())
-                                <svg class="size-2.5 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 6.5 2.5 2.5 4.5-5"/></svg>
+            {{-- Grouped by department: a flat list of everyone's tasks reads as
+                 noise once a workspace has more than one team. --}}
+            <div class="mb-3 space-y-3 border-b border-ink-200/70 pb-3 dark:border-ink-800">
+                @foreach ($taskGroups as $group)
+                    @php $groupDepartment = $group['department']; @endphp
+                    <section wire:key="task-group-{{ $groupDepartment?->id ?? 'none' }}">
+                        <p class="mb-1 flex items-center gap-2 px-2 text-[11px] font-bold uppercase tracking-wider text-ink-400">
+                            @if ($groupDepartment)
+                                <span class="size-2 shrink-0 rounded-full" style="background-color: {{ $groupDepartment->color }}"></span>
+                                {{ $groupDepartment->name }}
+                            @else
+                                No department
                             @endif
-                        </button>
+                            <span class="font-medium normal-case tracking-normal">· {{ $group['tasks']->count() }}</span>
+                        </p>
 
-                        <button type="button" wire:click="selectTask({{ $task->id }})"
-                                aria-label="Open {{ $task->title }}"
-                                @if ($activeTask && $activeTask->id === $task->id) aria-current="true" @endif
-                                class="min-w-0 flex-1 text-left">
-                            <span class="block truncate text-[15px] font-semibold {{ $task->isDone() ? 'text-ink-400 line-through' : '' }}">
-                                {{ $task->title }}
-                            </span>
-                            @if ($task->department || $task->assignee)
-                                <span class="mt-0.5 flex items-center gap-2 text-[13px] text-ink-400">
-                                    @if ($task->department)
-                                        <span class="inline-flex items-center gap-1">
-                                            <span class="size-1.5 rounded-full" style="background-color: {{ $task->department->color }}"></span>
-                                            {{ $task->department->name }}
-                                        </span>
-                                    @endif
-                                    @if ($task->assignee) <span class="truncate">{{ $task->assignee->name }}</span> @endif
-                                </span>
-                            @endif
-                        </button>
-
-                        {{-- The status pill doubles as the status picker. --}}
-                        <span x-data="{ open: false }" class="relative shrink-0">
-                            <button type="button" x-on:click="open = !open"
-                                    class="rounded-full px-2.5 py-1 text-[11px] font-bold transition"
-                                    style="background-color: {{ $task->statusMeta()['color'] }}1a; color: {{ $task->statusMeta()['color'] }}">
-                                {{ $task->statusMeta()['label'] }}
+                        <ul class="space-y-1">
+                            @foreach ($group['tasks'] as $index => $task)
+                        <li wire:key="day-task-{{ $task->id }}"
+                            class="rise group flex items-center gap-3 rounded-xl px-2 py-2 transition
+                                   {{ $activeTask && $activeTask->id === $task->id
+                                       ? 'bg-brand-50 dark:bg-brand-950/60'
+                                       : 'hover:bg-ink-50 dark:hover:bg-ink-800' }}"
+                            style="animation-delay: {{ $index * 40 }}ms">
+                            <button type="button" wire:click="toggleTask({{ $task->id }})"
+                                    role="checkbox" aria-checked="{{ $task->isDone() ? 'true' : 'false' }}"
+                                    aria-label="{{ $task->isDone() ? 'Reopen' : 'Complete' }} {{ $task->title }}"
+                                    class="grid size-[18px] shrink-0 place-items-center rounded-full border-2 transition"
+                                    style="{{ $task->isDone()
+                                        ? 'background-color: '.$statusMeta['done']['color'].'; border-color: '.$statusMeta['done']['color']
+                                        : 'border-color: '.$task->statusMeta()['color'] }}">
+                                @if ($task->isDone())
+                                    <svg class="size-2.5 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2.5 6.5 2.5 2.5 4.5-5"/></svg>
+                                @endif
                             </button>
 
-                            <span x-show="open" x-on:click.outside="open = false" x-transition x-cloak
-                                  class="absolute right-0 top-full z-10 mt-1 flex w-36 flex-col rounded-xl border border-ink-200 bg-white p-1 shadow-lg dark:border-ink-700 dark:bg-ink-800">
-                                @foreach ($statusMeta as $value => $meta)
-                                    <button type="button" x-on:click="open = false" wire:click="setTaskStatus({{ $task->id }}, '{{ $value }}')"
-                                            class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] font-semibold transition hover:bg-ink-100 dark:hover:bg-ink-700">
-                                        <span class="size-2 rounded-full" style="background-color: {{ $meta['color'] }}"></span>
-                                        {{ $meta['label'] }}
-                                    </button>
-                                @endforeach
+                            <button type="button" wire:click="selectTask({{ $task->id }})"
+                                    aria-label="Open {{ $task->title }}"
+                                    @if ($activeTask && $activeTask->id === $task->id) aria-current="true" @endif
+                                    class="min-w-0 flex-1 text-left">
+                                <span class="block truncate text-[15px] font-semibold {{ $task->isDone() ? 'text-ink-400 line-through' : '' }}">
+                                    {{ $task->title }}
+                                </span>
+                                @if ($task->department || $task->assignee)
+                                    <span class="mt-0.5 flex items-center gap-2 text-[13px] text-ink-400">
+                                        @if ($task->department)
+                                            <span class="inline-flex items-center gap-1">
+                                                <span class="size-1.5 rounded-full" style="background-color: {{ $task->department->color }}"></span>
+                                                {{ $task->department->name }}
+                                            </span>
+                                        @endif
+                                        @if ($task->assignee) <span class="truncate">{{ $task->assignee->name }}</span> @endif
+                                    </span>
+                                @endif
+                            </button>
+
+                            {{-- The status pill doubles as the status picker. --}}
+                            <span x-data="{ open: false }" class="relative shrink-0">
+                                <button type="button" x-on:click="open = !open"
+                                        class="rounded-full px-2.5 py-1 text-[11px] font-bold transition"
+                                        style="background-color: {{ $task->statusMeta()['color'] }}1a; color: {{ $task->statusMeta()['color'] }}">
+                                    {{ $task->statusMeta()['label'] }}
+                                </button>
+
+                                <span x-show="open" x-on:click.outside="open = false" x-transition x-cloak
+                                      class="absolute right-0 top-full z-10 mt-1 flex w-36 flex-col rounded-xl border border-ink-200 bg-white p-1 shadow-lg dark:border-ink-700 dark:bg-ink-800">
+                                    @foreach ($statusMeta as $value => $meta)
+                                        <button type="button" x-on:click="open = false" wire:click="setTaskStatus({{ $task->id }}, '{{ $value }}')"
+                                                class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] font-semibold transition hover:bg-ink-100 dark:hover:bg-ink-700">
+                                            <span class="size-2 rounded-full" style="background-color: {{ $meta['color'] }}"></span>
+                                            {{ $meta['label'] }}
+                                        </button>
+                                    @endforeach
+                                </span>
                             </span>
-                        </span>
-                    </li>
+                        </li>
+                            @endforeach
+                        </ul>
+                    </section>
                 @endforeach
-            </ul>
+            </div>
         @endif
 
         {{-- Quick add, the way the tablet app does it --}}

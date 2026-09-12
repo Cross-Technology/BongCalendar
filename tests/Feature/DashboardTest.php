@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Calendar;
+use App\Models\Department;
 use App\Models\Event;
+use App\Models\Task;
 use App\Models\User;
 use App\Services\WorkspaceService;
 use Carbon\CarbonImmutable;
@@ -123,5 +125,80 @@ class DashboardTest extends TestCase
         ]);
 
         $this->actingAs($user)->get('/dashboard')->assertOk()->assertDontSee('Foreign Calendar');
+    }
+
+    /**
+     * A flat list of every task on a day reads as noise once a workspace has
+     * more than one team, so the day panel gathers them under their department
+     * — in the sidebar's order, with anything unfiled last.
+     */
+    public function test_the_days_tasks_are_grouped_by_department(): void
+    {
+        $user = User::factory()->create(['timezone' => 'Asia/Phnom_Penh']);
+        $tenant = app(WorkspaceService::class)->create($user, 'Acme', 'Asia/Phnom_Penh');
+        $user->refresh();
+
+        $sales = Department::factory()->create([
+            'tenant_id' => $tenant->id, 'name' => 'Sales', 'position' => 1,
+        ]);
+        $operations = Department::factory()->create([
+            'tenant_id' => $tenant->id, 'name' => 'Operations', 'position' => 0,
+        ]);
+
+        $today = now($tenant->timezone)->setTime(9, 0);
+
+        $make = fn (?Department $department, string $title) => Task::create([
+            'tenant_id' => $tenant->id,
+            'department_id' => $department?->id,
+            'created_by' => $user->id,
+            'title' => $title,
+            'status' => 'todo',
+            'priority' => 'medium',
+            'start_date' => $today->toIso8601String(),
+        ]);
+
+        $make($sales, 'Call the leads');
+        $make($operations, 'Open the shop');
+        $make($operations, 'Count the float');
+        $make(null, 'Unfiled errand');
+
+        $groups = Livewire::actingAs($user)
+            ->test('pages::dashboard')
+            ->viewData('taskGroups');
+
+        // Ordered by the department's position, with the unfiled group last.
+        $this->assertSame(
+            ['Operations', 'Sales', null],
+            $groups->map(fn ($group) => $group['department']?->name)->all(),
+        );
+
+        $this->assertSame([2, 1, 1], $groups->map(fn ($group) => $group['tasks']->count())->all());
+    }
+
+    public function test_the_day_panel_shows_the_department_headings(): void
+    {
+        $user = User::factory()->create(['timezone' => 'Asia/Phnom_Penh']);
+        $tenant = app(WorkspaceService::class)->create($user, 'Acme', 'Asia/Phnom_Penh');
+        $user->refresh();
+
+        $department = Department::factory()->create([
+            'tenant_id' => $tenant->id, 'name' => 'Operations',
+        ]);
+
+        Task::create([
+            'tenant_id' => $tenant->id,
+            'department_id' => $department->id,
+            'created_by' => $user->id,
+            'title' => 'Open the shop',
+            'status' => 'todo',
+            'priority' => 'medium',
+            'start_date' => now($tenant->timezone)->setTime(9, 0)->toIso8601String(),
+        ]);
+
+        $this->actingAs($user)
+            ->get('/dashboard')
+            ->assertOk()
+            ->assertSee('Operations')
+            ->assertSee('Open the shop');
     }
 }

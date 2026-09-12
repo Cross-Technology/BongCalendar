@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Calendar;
 use App\Models\Department;
 use App\Models\Event;
+use App\Models\Task;
 use App\Models\User;
 use App\Services\WorkspaceService;
 use Carbon\CarbonImmutable;
@@ -149,5 +150,40 @@ class DepartmentPageTest extends TestCase
 
         $this->assertSoftDeleted($department);
         $this->assertNull($calendar->fresh()->department_id);
+    }
+
+    /**
+     * Calendar and event counts are filtered to what the viewer may see, so a
+     * workspace that files its work as tasks showed "0 calendars · 0 events"
+     * and nothing else. Tasks are counted too now.
+     */
+    public function test_a_department_reports_how_many_tasks_it_holds(): void
+    {
+        $user = $this->makeOwner();
+        $department = Department::factory()->create([
+            'tenant_id' => $user->current_tenant_id,
+            'name' => 'Operations',
+        ]);
+
+        $make = fn (string $title, string $status, ?int $parent = null) => Task::create([
+            'tenant_id' => $user->current_tenant_id,
+            'department_id' => $department->id,
+            'created_by' => $user->id,
+            'parent_task_id' => $parent,
+            'title' => $title,
+            'status' => $status,
+            'priority' => 'medium',
+        ]);
+
+        $open = $make('Open the shop', 'todo');
+        $make('Count the float', 'done');
+        // Subtasks are counted through their parent, not on their own.
+        $make('Unlock the door', 'todo', $open->id);
+
+        $this->actingAs($user)
+            ->get('/departments')
+            ->assertOk()
+            ->assertSee('2 tasks')
+            ->assertSee('(1 open)');
     }
 }

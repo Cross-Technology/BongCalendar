@@ -56,6 +56,11 @@ class extends Component
             ->withCount([
                 'calendars' => fn ($q) => $q->whereIn('calendars.id', $visibleIds),
                 'events' => fn ($q) => $q->whereIn('events.calendar_id', $visibleIds),
+                // Tasks are workspace-wide, so unlike calendars and events they
+                // are not filtered by what this user may see. Subtasks are left
+                // out: they are counted through their parent.
+                'tasks' => fn ($q) => $q->whereNull('parent_task_id'),
+                'tasks as open_tasks_count' => fn ($q) => $q->whereNull('parent_task_id')->where('status', '!=', 'done'),
             ])
             ->with([
                 'calendars' => fn ($q) => $q->whereIn('calendars.id', $visibleIds)->orderBy('name'),
@@ -258,7 +263,11 @@ class extends Component
                 <div class="min-w-0 flex-1">
                     <h2 class="truncate text-[17px] font-bold tracking-tight">{{ $department->name }}</h2>
                     <p class="text-[13px] text-ink-400">
-                        {{ $department->calendars_count }} {{ Str::plural('calendar', $department->calendars_count) }}
+                        {{ $department->tasks_count }} {{ Str::plural('task', $department->tasks_count) }}
+                        @if ($department->open_tasks_count > 0)
+                            <span class="font-semibold text-ink-500 dark:text-ink-300">({{ $department->open_tasks_count }} open)</span>
+                        @endif
+                        · {{ $department->calendars_count }} {{ Str::plural('calendar', $department->calendars_count) }}
                         · {{ $department->events_count }} {{ Str::plural('event', $department->events_count) }}
                         @if ($department->description) · {{ $department->description }} @endif
                     </p>

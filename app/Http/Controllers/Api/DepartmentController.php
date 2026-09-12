@@ -35,6 +35,8 @@ class DepartmentController extends Controller
             ->withCount([
                 'calendars' => fn ($q) => $q->whereIn('calendars.id', $visibleIds),
                 'events' => fn ($q) => $q->whereIn('events.calendar_id', $visibleIds),
+                // Tasks are workspace-wide, so they are not visibility-filtered.
+                'tasks' => fn ($q) => $q->whereNull('parent_task_id'),
             ])
             ->get();
 

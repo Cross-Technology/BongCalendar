@@ -27,6 +27,7 @@ class DepartmentResource extends JsonResource
             'can_manage' => $user && $this->tenant_id ? $user->isTenantAdmin($this->tenant_id) : false,
             'members' => UserResource::collection($this->whenLoaded('members')),
             'members_count' => $this->whenCounted('members'),
+            'tasks_count' => $this->whenCounted('tasks'),
             'calendars_count' => $this->whenCounted('calendars'),
             'events_count' => $this->whenCounted('events'),
             'calendars' => CalendarResource::collection($this->whenLoaded('calendars')),

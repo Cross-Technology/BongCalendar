@@ -61,6 +61,12 @@ class Department extends Model
             ->withTimestamps();
     }
 
+    /** @return HasMany<Task, $this> */
+    public function tasks(): HasMany
+    {
+        return $this->hasMany(Task::class);
+    }
+
     /** @return HasMany<Calendar, $this> */
     public function calendars(): HasMany
     {
