@@ -49,6 +49,9 @@ class SampleDataSeederTest extends TestCase
         }
 
         $this->assertTrue($departments->contains(fn ($d) => $d->members->contains(fn ($m) => $m->pivot->role === 'lead')));
+
+        // Each one carries a header, so the sample shows that feature too.
+        $this->assertTrue($departments->every(fn ($d) => str_contains((string) $d->report_header, '{{department}}')));
     }
 
     public function test_the_tasks_carry_real_progress_to_report_on(): void

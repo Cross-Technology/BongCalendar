@@ -1,5 +1,5 @@
 @import 'tailwindcss';
-@import 'trix/dist/trix.css';
+@import 'quill/dist/quill.core.css';
 
 /*
  * Theme is an explicit choice, never inherited from the OS: light is the
@@ -146,17 +146,21 @@
 }
 
 /*
- * Trix's toolbar, rebuilt as a ribbon.
+ * The rich-text editor: a plain toolbar bar sitting on top of the writing area,
+ * the two reading as one control.
  *
- * Out of the box it is a row of floated, borderless text-height buttons whose
- * icons sit at 0.6 opacity — hard to read on white and invisible on a dark
- * card, since the icons are black SVGs. This gives them square 32px targets,
- * full contrast, dividers between the groups, and a highlight on the ones
- * currently applied, the way a word processor's ribbon reads.
+ * Only Quill's *core* stylesheet is imported — the "snow" theme brings its own
+ * chrome, which would have to be undone to match the app. The toolbar markup is
+ * ours (components/rich-text-editor.blade.php); Quill only fills the buttons
+ * with icons and keeps `ql-active` in step with the cursor.
  *
  * Unlayered like the rules above, so these beat Tailwind's preflight.
  */
-trix-toolbar {
+.rich-editor__toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.125rem;
     border: 1px solid var(--color-ink-200);
     border-bottom: 0;
     border-radius: 0.75rem 0.75rem 0 0;
@@ -164,277 +168,197 @@ trix-toolbar {
     padding: 0.3125rem;
 }
 
-trix-toolbar .trix-button-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.125rem;
-    overflow: visible;
-}
-
-trix-toolbar .trix-button-group {
+.rich-editor__group {
     display: flex;
     align-items: center;
     gap: 0.125rem;
-    margin: 0;
     padding: 0 0.25rem;
-    border: 0;
-    border-radius: 0;
 }
 
-/* Ribbon-style divider between groups. */
-trix-toolbar .trix-button-group + .trix-button-group {
+.rich-editor__group + .rich-editor__group {
     border-left: 1px solid var(--color-ink-200);
 }
 
-/* Pushes undo/redo to the far end. */
-trix-toolbar .trix-button-group-spacer {
-    flex: 1 1 auto;
-}
-
-trix-toolbar .trix-button {
-    float: none;
+.rich-editor__toolbar button {
     display: grid;
     place-items: center;
     width: 2rem;
     height: 2rem;
-    margin: 0;
     padding: 0;
     border: 0;
     border-radius: 0.375rem;
     background: transparent;
     color: var(--color-ink-600);
-    font-size: 12px;
-    font-weight: 700;
+    cursor: pointer;
     transition: background-color 0.12s ease, color 0.12s ease;
 }
 
-trix-toolbar .trix-button:not(:disabled):hover {
+/*
+ * The icons are ours (components/rich-text-editor.blade.php) and drawn with
+ * `currentColor`, so hover, the applied state and dark mode all follow the
+ * button's colour with nothing to invert.
+ *
+ * Quill only injects icons from its snow/bubble themes, neither of which is
+ * loaded — without these the toolbar renders as a row of empty squares that
+ * only appear when hovered.
+ */
+.rich-editor__toolbar button svg {
+    width: 1.125rem;
+    height: 1.125rem;
+}
+
+.rich-editor__glyph {
+    font-size: 0.875rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.rich-editor__glyph--bold {
+    font-weight: 800;
+}
+
+/* A serif italic reads as italic at this size; the sans one barely leans. */
+.rich-editor__glyph--italic {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 600;
+}
+
+.rich-editor__glyph--strike {
+    text-decoration: line-through;
+}
+
+.rich-editor__toolbar button:hover {
     background: var(--color-ink-200);
     color: var(--color-ink-900);
 }
 
-trix-toolbar .trix-button:focus-visible {
+.rich-editor__toolbar button:focus-visible {
     outline: 2px solid var(--color-brand-500);
     outline-offset: 1px;
 }
 
-/*
- * The "currently applied" state. A light highlight rather than a solid fill,
- * so the black icon keeps its contrast and needs no inversion — and it reads
- * as a pressed toggle rather than a different button.
- */
-trix-toolbar .trix-button.trix-active {
+/* Applied at the cursor — a light highlight, so it reads as a pressed toggle. */
+.rich-editor__toolbar button.ql-active {
     background: var(--color-brand-100);
     color: var(--color-brand-700);
 }
 
-trix-toolbar .trix-button:disabled {
-    opacity: 0.3;
-    cursor: default;
-}
-
-/*
- * Trix clamps its icon buttons with `max-width: calc(0.8em + 4vw)`, which on a
- * phone works out at about 26px — shrinking the targets on exactly the screens
- * where they are hardest to hit. The size is pinned here instead, and grows a
- * little on touch-sized screens.
- */
-trix-toolbar .trix-button--icon {
-    width: 2rem;
-    height: 2rem;
-    max-width: none;
-}
-
-@media (max-width: 640px) {
-    trix-toolbar .trix-button,
-    trix-toolbar .trix-button--icon {
-        width: 2.25rem;
-        height: 2.25rem;
-    }
-}
-
-/* Trix dims its icons to 0.6; at this size they can be read properly. */
-trix-toolbar .trix-button--icon::before {
-    opacity: 0.85;
-}
-
-trix-toolbar .trix-button:hover .trix-button--icon::before,
-trix-toolbar .trix-button--icon:hover::before,
-trix-toolbar .trix-button--icon.trix-active::before {
-    opacity: 1;
-}
-
-/*
- * File attachments are refused in app.js — there is no upload endpoint behind
- * them — so Trix's paperclip would be a button that does nothing. Notes carry
- * their own file picker beneath the editor instead.
- */
-trix-toolbar .trix-button-group--file-tools {
-    display: none;
-}
-
-/* The editor is the lower half of the same control as the toolbar. */
-trix-editor {
-    min-height: 14rem;
+.rich-editor .ql-container {
     border: 1px solid var(--color-ink-200);
     border-radius: 0 0 0.75rem 0.75rem;
     background: #fff;
+    font-family: inherit;
+}
+
+.rich-editor .ql-editor {
     padding: 0.75rem 0.875rem;
 }
 
-trix-editor:focus {
-    outline: none;
+.rich-editor:focus-within .ql-container {
     border-color: var(--color-brand-400);
     box-shadow: 0 0 0 3px var(--color-brand-100);
 }
 
-trix-editor:empty:not(:focus)::before {
+.rich-editor .ql-editor.ql-blank::before {
+    left: 0.875rem;
+    right: 0.875rem;
     color: var(--color-ink-300);
+    font-style: normal;
 }
 
 /* ── Dark theme ─────────────────────────────────────────────────────────── */
 
-[data-theme='dark'] trix-toolbar {
+[data-theme='dark'] .rich-editor__toolbar {
     border-color: var(--color-ink-700);
     background: var(--color-ink-900);
 }
 
-[data-theme='dark'] trix-toolbar .trix-button-group + .trix-button-group {
+[data-theme='dark'] .rich-editor__group + .rich-editor__group {
     border-left-color: var(--color-ink-700);
 }
 
-[data-theme='dark'] trix-toolbar .trix-button {
+[data-theme='dark'] .rich-editor__toolbar button {
     color: var(--color-ink-300);
 }
 
-[data-theme='dark'] trix-toolbar .trix-button:not(:disabled):hover {
+[data-theme='dark'] .rich-editor__toolbar button:hover {
     background: var(--color-ink-700);
     color: #fff;
 }
 
-[data-theme='dark'] trix-toolbar .trix-button.trix-active {
+[data-theme='dark'] .rich-editor__toolbar button.ql-active {
     background: var(--color-brand-900);
     color: var(--color-brand-100);
 }
 
-/*
- * Trix's icons are black SVGs baked into background images, so they cannot
- * inherit a colour. Inverting them is what makes them visible on a dark bar.
- */
-[data-theme='dark'] trix-toolbar .trix-button--icon::before {
-    filter: invert(1);
-}
-
-[data-theme='dark'] trix-editor {
+[data-theme='dark'] .rich-editor .ql-container {
     border-color: var(--color-ink-700);
     background: var(--color-ink-800);
     color: var(--color-ink-100);
 }
 
-[data-theme='dark'] trix-editor:focus {
+[data-theme='dark'] .rich-editor:focus-within .ql-container {
     border-color: var(--color-brand-400);
     box-shadow: 0 0 0 3px var(--color-brand-950);
 }
 
 /*
  * Rich text typography — for BOTH the saved markup (.rich-text) and the live
- * editor (trix-editor).
+ * editor (.ql-editor).
  *
  * Applying it to only one of them is what breaks WYSIWYG: Tailwind's preflight
- * resets `ol, ul, menu { list-style: none }`, flattens headings to body text
- * and strips link colour, and those resets reach inside the editor too. Trix
- * ships no typography of its own, so a bulleted list looked like unmarked
- * lines while being typed even though it rendered correctly once saved.
+ * flattens headings to body text and strips link colour, and those resets reach
+ * inside the editor too, so text looked one way while being typed and another
+ * once saved.
+ *
+ * Lists are the exception and are styled for `.rich-text` alone — see below.
  *
  * Unlayered, so it outranks preflight whichever layer that sits in.
  */
-:is(.rich-text, trix-editor) {
+:is(.rich-text, .ql-editor) {
     font-size: 15px;
     line-height: 1.7;
     word-break: break-word;
 }
 
-:is(.rich-text, trix-editor) > * + * {
+:is(.rich-text, .ql-editor) > * + * {
     margin-top: 0.75rem;
 }
 
-:is(.rich-text, trix-editor) h1 {
+:is(.rich-text, .ql-editor) :is(h1, h2) {
     font-size: 1.125rem;
     font-weight: 800;
     letter-spacing: -0.01em;
 }
 
-:is(.rich-text, trix-editor) strong {
+:is(.rich-text, .ql-editor) strong {
     font-weight: 700;
 }
 
-:is(.rich-text, trix-editor) em {
+:is(.rich-text, .ql-editor) em {
     font-style: italic;
 }
 
-:is(.rich-text, trix-editor) del {
+/* `s` is what the editor writes; `del` is what the old one wrote. */
+:is(.rich-text, .ql-editor) :is(s, del) {
     text-decoration: line-through;
     opacity: 0.7;
 }
 
-:is(.rich-text, trix-editor) a {
+:is(.rich-text, .ql-editor) a {
     color: var(--color-brand-600);
     text-decoration: underline;
     text-underline-offset: 2px;
 }
 
-:is(.rich-text, trix-editor) ul,
-:is(.rich-text, trix-editor) ol {
-    padding-left: 1.35rem;
-}
-
-/*
- * Longhand on purpose. `list-style: disc` is a shorthand whose other parts
- * reset to their initial values, and a minifier is entitled to rewrite it as
- * `list-style: outside` — correct, but impossible to read and easy to "fix"
- * into something broken. The longhand says what it means.
- */
-:is(.rich-text, trix-editor) ul {
-    list-style-type: disc;
-    list-style-position: outside;
-}
-
-:is(.rich-text, trix-editor) ol {
-    list-style-type: decimal;
-    list-style-position: outside;
-}
-
-/* Trix nests a sublist inside its parent <li>, so mark the levels apart. */
-:is(.rich-text, trix-editor) ul ul {
-    list-style-type: circle;
-}
-
-:is(.rich-text, trix-editor) ul ul ul {
-    list-style-type: square;
-}
-
-:is(.rich-text, trix-editor) li {
-    display: list-item;
-}
-
-:is(.rich-text, trix-editor) li + li {
-    margin-top: 0.25rem;
-}
-
-/* A nested list hangs off its item, not adrift from it. */
-:is(.rich-text, trix-editor) li > ul,
-:is(.rich-text, trix-editor) li > ol {
-    margin-top: 0.25rem;
-}
-
-:is(.rich-text, trix-editor) blockquote {
+:is(.rich-text, .ql-editor) blockquote {
     border-left: 3px solid var(--color-ink-200);
     padding-left: 0.875rem;
     color: var(--color-ink-500);
 }
 
-:is(.rich-text, trix-editor) pre {
+:is(.rich-text, .ql-editor) pre {
     border-radius: 0.5rem;
     background: var(--color-ink-100);
     padding: 0.75rem 0.875rem;
@@ -444,9 +368,55 @@ trix-editor:empty:not(:focus)::before {
     overflow-x: auto;
 }
 
-[data-theme='dark'] :is(.rich-text, trix-editor) a { color: var(--color-brand-300); }
-[data-theme='dark'] :is(.rich-text, trix-editor) blockquote { border-left-color: var(--color-ink-700); }
-[data-theme='dark'] :is(.rich-text, trix-editor) pre { background: var(--color-ink-800); }
+/*
+ * Lists: saved markup only.
+ *
+ * Inside the editor Quill draws its own markers with `li[data-list] > .ql-ui`
+ * and sets `list-style: none`, so adding native markers here would show two
+ * bullets per line. The saved HTML is plain <ul>/<ol>, which Tailwind's
+ * preflight strips — that half does need dressing.
+ *
+ * Longhand on purpose: `list-style: disc` is a shorthand whose other parts
+ * reset to their initial values, and a minifier is entitled to rewrite it as
+ * `list-style: outside` — correct, but impossible to read.
+ */
+.rich-text :is(ul, ol) {
+    padding-left: 1.35rem;
+}
+
+.rich-text ul {
+    list-style-type: disc;
+    list-style-position: outside;
+}
+
+.rich-text ol {
+    list-style-type: decimal;
+    list-style-position: outside;
+}
+
+.rich-text ul ul {
+    list-style-type: circle;
+}
+
+.rich-text ul ul ul {
+    list-style-type: square;
+}
+
+.rich-text li {
+    display: list-item;
+}
+
+.rich-text li + li {
+    margin-top: 0.25rem;
+}
+
+.rich-text li > :is(ul, ol) {
+    margin-top: 0.25rem;
+}
+
+[data-theme='dark'] :is(.rich-text, .ql-editor) a { color: var(--color-brand-300); }
+[data-theme='dark'] :is(.rich-text, .ql-editor) blockquote { border-left-color: var(--color-ink-700); }
+[data-theme='dark'] :is(.rich-text, .ql-editor) pre { background: var(--color-ink-800); }
 
 /* Staggered entrance for the day cells / event rows. */
 @keyframes rise {

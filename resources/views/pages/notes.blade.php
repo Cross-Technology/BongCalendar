@@ -56,6 +56,15 @@ class extends Component
     /** Files chosen in the editor but not yet saved against the note. */
     public array $uploads = [];
 
+    /**
+     * Bumped every time the editor is opened, and folded into its wire:key.
+     *
+     * The editor sits behind wire:ignore, so Livewire leaves its DOM alone. If
+     * the key repeats, the morph reuses the element already there — Alpine
+     * never re-runs x-init and Quill keeps the previous note's text.
+     */
+    public int $editorSession = 0;
+
     public function mount(): void
     {
         $this->requireTenant();
@@ -149,6 +158,7 @@ class extends Component
         $this->form_color = $this->quick_color;
         $this->form_visibility = $this->quick_visibility;
         $this->form_pinned = false;
+        $this->editorSession++;
         $this->showModal = true;
     }
 
@@ -209,6 +219,7 @@ class extends Component
         $this->form_color = Note::COLORS[0];
         $this->form_visibility = 'tenant';
         $this->form_pinned = false;
+        $this->editorSession++;
         $this->showModal = true;
     }
 
@@ -227,6 +238,7 @@ class extends Component
         $this->form_visibility = $note->visibility;
         $this->form_pinned = $note->is_pinned;
         $this->uploads = [];
+        $this->editorSession++;
         $this->showModal = true;
     }
 
@@ -698,6 +710,7 @@ class extends Component
     {{-- Full editor: titles, pinning, and every edit --}}
     @if ($showModal)
         <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
+             wire:key="note-dialog-{{ $editingId ?? 'new' }}-{{ $editorSession }}"
              x-on:keydown.escape.window="$wire.set('showModal', false)"
              wire:click.self="$set('showModal', false)">
             {{-- Capped at the viewport with only the fields scrolling. Without
@@ -721,24 +734,12 @@ class extends Component
 
                         <div>
                             <span class="{{ $labelClass }}">Note</span>
-                            {{--
-                                wire:ignore is load-bearing: Trix rewrites this
-                                subtree as the user types, and letting Livewire
-                                morph it would wipe the note mid-sentence. The
-                                key rebuilds it per note, so opening a second
-                                one never shows the first one's text.
+                            <x-rich-text-editor
+                                model="form_body"
+                                :value="$form_body"
+                                placeholder="Write it down…"
+                                key="note-editor-{{ $editingId ?? 'new' }}-{{ $editorSession }}" />
 
-                                `$wire.set(..., false)` stores the value without
-                                a round trip — re-rendering on every keystroke
-                                would be wasteful and, behind wire:ignore, out
-                                of step with what is on screen.
-                            --}}
-                            <div wire:ignore wire:key="note-editor-{{ $editingId ?? 'new' }}" x-data>
-                                <input id="note-body-input" type="hidden" value="{{ $form_body }}">
-                                <trix-editor input="note-body-input"
-                                             placeholder="Write it down…"
-                                             x-on:trix-change="$wire.set('form_body', $event.target.value, false)"></trix-editor>
-                            </div>
                             @error('form_body') <p class="mt-1.5 text-[13px] font-medium text-red-600">{{ $message }}</p> @enderror
                         </div>
 

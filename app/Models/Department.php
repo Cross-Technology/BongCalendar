@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
  * A grouping of calendars inside a workspace — Sales, Ops, Errands. Calendars
  * may sit outside every department, in which case they read as "ungrouped".
  */
-#[Fillable(['tenant_id', 'name', 'slug', 'description', 'color', 'icon', 'position'])]
+#[Fillable(['tenant_id', 'name', 'slug', 'description', 'color', 'icon', 'position', 'report_header'])]
 class Department extends Model
 {
     use HasFactory, SoftDeletes;
@@ -71,6 +71,11 @@ class Department extends Model
     public function events(): HasManyThrough
     {
         return $this->hasManyThrough(Event::class, Calendar::class);
+    }
+
+    public function hasMember(User $user): bool
+    {
+        return $this->members()->whereKey($user->id)->exists();
     }
 
     /** Departments in a workspace, in the order the sidebar shows them. */

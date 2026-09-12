@@ -10,6 +10,7 @@ use App\Models\Calendar;
 use App\Models\Department;
 use App\Models\User;
 use App\Services\DepartmentService;
+use App\Services\ReportService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -94,6 +95,25 @@ class DepartmentController extends Controller
         $department->delete();
 
         return response()->json(['message' => 'Department deleted.']);
+    }
+
+    /**
+     * The header rendered above every report this department files. Open to
+     * its members, not just workspace admins — the people who write the
+     * reports are the ones who care how they look.
+     */
+    public function updateReportHeader(Request $request, Department $department, ReportService $reports): JsonResponse
+    {
+        $this->authorize('manageReportHeader', $department);
+
+        $data = $request->validate([
+            // Nullable rather than required: sending nothing clears it.
+            'report_header' => ['nullable', 'string', 'max:20000'],
+        ]);
+
+        $reports->saveHeader($department, (string) ($data['report_header'] ?? ''));
+
+        return response()->json(['data' => new DepartmentResource($department->fresh())]);
     }
 
     /* ------------------------------------------------------------- members */

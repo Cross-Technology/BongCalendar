@@ -29,6 +29,22 @@ class extends Component
 
     public string $form_body = '';
 
+    /** Department whose header is being designed; that dialog is open while set. */
+    public ?int $headerDepartmentId = null;
+
+    public string $header_body = '';
+
+    /**
+     * Bumped every time an editor is opened, and folded into its wire:key.
+     *
+     * The editor sits behind wire:ignore, so Livewire leaves its DOM alone. If
+     * the key is the same as last time, the morph reuses the element that is
+     * already there — Alpine never re-runs x-init, Quill keeps whatever it held
+     * before, and the freshly saved text is never loaded. A key that changes
+     * per opening forces a genuinely new element.
+     */
+    public int $editorSession = 0;
+
     /** Per-render cache for tasksByDepartment(); never persisted. */
     protected ?Collection $taskCache = null;
 
@@ -180,7 +196,9 @@ class extends Component
             return null;
         }
 
-        $report = Report::with(['author', 'lastEditor', 'department'])->find($this->viewingId);
+        // department.tenant because the header's {{workspace}} field reads it;
+        // without it every report with a header costs an extra query.
+        $report = Report::with(['author', 'lastEditor', 'department.tenant'])->find($this->viewingId);
 
         if (! $report || $this->currentUser()->cannot('view', $report)) {
             $this->viewingId = null;
@@ -212,6 +230,7 @@ class extends Component
 
         $this->resetValidation();
         $this->viewingId = null;
+        $this->editorSession++;
         $this->writingDepartmentId = $department->id;
         $this->form_body = $existing?->body ?? '';
     }
@@ -247,6 +266,49 @@ class extends Component
         session()->flash('status', 'Report saved.');
     }
 
+    /* -------------------------------------------------------------- headers */
+
+    /**
+     * The header belongs to the department, and the people who write its
+     * reports are the ones who decide how it looks — see
+     * DepartmentPolicy::manageReportHeader.
+     */
+    public function editHeader(int $departmentId): void
+    {
+        $department = Department::forTenant($this->requireTenant()->id)->findOrFail($departmentId);
+
+        $this->authorize('manageReportHeader', $department);
+
+        $this->resetValidation();
+        // One dialog at a time — and only one editor on the page at once.
+        $this->writingDepartmentId = null;
+        $this->viewingId = null;
+        $this->editorSession++;
+        $this->headerDepartmentId = $department->id;
+        $this->header_body = (string) $department->report_header;
+    }
+
+    public function cancelHeader(): void
+    {
+        $this->headerDepartmentId = null;
+        $this->header_body = '';
+        $this->resetValidation();
+    }
+
+    public function saveHeader(ReportService $reports): void
+    {
+        $department = Department::forTenant($this->requireTenant()->id)->findOrFail($this->headerDepartmentId);
+
+        $this->authorize('manageReportHeader', $department);
+
+        $reports->saveHeader($department, $this->header_body);
+
+        $this->headerDepartmentId = null;
+        $this->header_body = '';
+
+        session()->flash('status', 'Header saved.');
+    }
+
     /* ------------------------------------------------- pulling tasks across */
 
     /**
@@ -269,7 +331,7 @@ class extends Component
             ])
             ->findOrFail($taskId);
 
-        $this->dispatch('report-insert', html: $this->taskLine($task));
+        $this->dispatch('rich-text-insert', html: $this->taskLine($task));
     }
 
     /** Every task for the department being written, as a list. */
@@ -283,7 +345,7 @@ class extends Component
 
         $items = $tasks->map(fn (Task $task) => '<li>'.$this->taskLine($task, wrap: false).'</li>')->implode('');
 
-        $this->dispatch('report-insert', html: '<ul>'.$items.'</ul>');
+        $this->dispatch('rich-text-insert', html: '<ul>'.$items.'</ul>');
     }
 
     /** Title, where it got to, and how much of its checklist is ticked. */
@@ -319,12 +381,40 @@ class extends Component
 
     public function with(): array
     {
+        $viewing = $this->viewingReport();
+
         return [
             'rows' => $this->rows(),
-            'viewingReport' => $this->viewingReport(),
+            'viewingReport' => $viewing,
             'writingDepartment' => $this->writingDepartmentId
                 ? Department::forTenant($this->requireTenant()->id)->find($this->writingDepartmentId)
                 : null,
+            'headerDepartment' => $this->headerDepartmentId
+                ? Department::forTenant($this->requireTenant()->id)->find($this->headerDepartmentId)
+                : null,
+            'headerFields' => ReportService::HEADER_FIELDS,
+            // What each field turns into, shown beside the field itself —
+            // being told `{{date}}` is "the day being reported on" is weaker
+            // than being shown "Friday, 12 September 2026".
+            'headerExamples' => $this->headerDepartmentId
+                ? app(ReportService::class)->headerValues(
+                    Department::forTenant($this->requireTenant()->id)->with('tenant')->find($this->headerDepartmentId),
+                    $this->day(),
+                    $this->currentUser(),
+                )
+                : [],
+            // Rendered with their fields filled, so both dialogs show the
+            // header exactly as a reader will see it.
+            'viewingHeader' => $viewing
+                ? app(ReportService::class)->renderHeader($viewing->department, $viewing->report_date, $viewing->author)
+                : '',
+            'writingHeader' => $this->writingDepartmentId
+                ? app(ReportService::class)->renderHeader(
+                    Department::forTenant($this->requireTenant()->id)->with('tenant')->find($this->writingDepartmentId),
+                    $this->day(),
+                    $this->currentUser(),
+                )
+                : '',
             'writingTasks' => $this->writingDepartmentId
                 ? ($this->tasksByDepartment()->get((int) $this->writingDepartmentId) ?? collect())
                 : collect(),
@@ -403,6 +493,13 @@ class extends Component
                         <span class="size-3 shrink-0 rounded-full" style="background-color: {{ $department->color }}"></span>
 
                         <h2 class="min-w-0 flex-1 truncate text-[16px] font-bold tracking-tight">{{ $department->name }}</h2>
+
+                        @can('manageReportHeader', $department)
+                            <button type="button" wire:click="editHeader({{ $department->id }})"
+                                    class="rounded-lg px-2.5 py-1 text-[12px] font-bold text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 dark:text-ink-400 dark:hover:bg-ink-800 dark:hover:text-ink-100">
+                                {{ $department->report_header ? 'Header' : 'Design header' }}
+                            </button>
+                        @endcan
 
                         @if ($report)
                             <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
@@ -504,7 +601,7 @@ class extends Component
         <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
              x-on:keydown.escape.window="$wire.closeReport()"
              wire:click.self="closeReport">
-            <div class="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
+            <div class="flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
                 <header class="flex shrink-0 items-start gap-3 border-b border-ink-200/80 px-6 py-4 dark:border-ink-800">
                     <span class="mt-1.5 size-3 shrink-0 rounded-full" style="background-color: {{ $viewingReport->department->color }}"></span>
                     <div class="min-w-0 flex-1">
@@ -520,8 +617,17 @@ class extends Component
                 {{-- Safe to render unescaped: ReportService sanitises every body
                      through the `report` HTMLPurifier profile before it is
                      stored, and nothing else writes this column. --}}
-                <div class="rich-text min-h-0 flex-1 overflow-y-auto px-6 py-5 text-ink-700 dark:text-ink-200">
-                    {!! $viewingReport->body !!}
+                <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                    @if ($viewingHeader !== '')
+                        {{-- The department's own header, with its fields filled
+                             in. Stored once and rendered here rather than typed
+                             into the body, so every day's report matches. --}}
+                        <div class="rich-text mb-5 border-b border-ink-200/70 pb-4 text-ink-700 dark:border-ink-800 dark:text-ink-200">
+                            {!! $viewingHeader !!}
+                        </div>
+                    @endif
+
+                    <div class="rich-text text-ink-700 dark:text-ink-200">{!! $viewingReport->body !!}</div>
                 </div>
 
                 <footer class="flex shrink-0 items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">
@@ -540,91 +646,170 @@ class extends Component
         </div>
     @endif
 
-    {{-- Editor --}}
+    {{-- Header designer: the department's own styling for its reports --}}
+    @if ($headerDepartment)
+        <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
+             wire:key="header-dialog-{{ $headerDepartment->id }}-{{ $editorSession }}"
+             x-on:keydown.escape.window="$wire.cancelHeader()">
+            <div class="flex max-h-[94dvh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
+                <header class="flex shrink-0 items-center gap-3 border-b border-ink-200/80 px-6 py-4 dark:border-ink-800">
+                    <span class="size-3 shrink-0 rounded-full" style="background-color: {{ $headerDepartment->color }}"></span>
+                    <div class="min-w-0 flex-1">
+                        <h2 class="truncate text-lg font-bold tracking-tight">{{ $headerDepartment->name }} header</h2>
+                        <p class="text-[12px] text-ink-400">Sits above every report this department files.</p>
+                    </div>
+                    <button type="button" wire:click="cancelHeader" aria-label="Close"
+                            class="grid size-8 shrink-0 place-items-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 dark:hover:bg-ink-800">✕</button>
+                </header>
+
+                <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                    {{-- Fields fill themselves in when the header is rendered,
+                         so the date and the author never need retyping. --}}
+                    <div class="mb-3">
+                        <p class="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-400">
+                            Fields that fill themselves in
+                        </p>
+                        <div class="flex flex-wrap gap-1.5">
+                            @foreach ($headerFields as $field => $explanation)
+                                {{-- Inserted in the browser rather than through
+                                     the server: dropping a 14-character token
+                                     should not cost a round trip, and it lands
+                                     wherever the cursor was. --}}
+                                <button type="button"
+                                        x-on:click="$dispatch('rich-text-insert', { html: @js($field) })"
+                                        title="{{ $explanation }}"
+                                        class="flex items-center gap-1.5 rounded-lg border border-ink-200 px-2.5 py-1 text-[12px] transition hover:border-brand-300 hover:bg-brand-50 dark:border-ink-700 dark:hover:border-brand-700 dark:hover:bg-brand-950">
+                                    <span class="font-mono font-bold text-ink-700 dark:text-ink-200">{{ $field }}</span>
+                                    {{-- headerValues() escapes for markup; decoded here so it displays as written. --}}
+                                    <span class="text-ink-400">→ {{ html_entity_decode($headerExamples[$field] ?? '', ENT_QUOTES | ENT_HTML5) }}</span>
+                                </button>
+                            @endforeach
+                        </div>
+                    </div>
+
+                    <x-rich-text-editor
+                        model="header_body"
+                        :value="$header_body"
+                        :placeholder="'e.g. {{department}} — Daily Report'"
+                        key="header-editor-{{ $headerDepartment->id }}-{{ $editorSession }}"
+                        min-height="8rem" />
+
+                    <p class="mt-2 text-[12px] text-ink-400">
+                        Leave it empty to go back to no header.
+                    </p>
+                </div>
+
+                <footer class="flex shrink-0 items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">
+                    <div class="ml-auto flex gap-2">
+                        <button type="button" wire:click="cancelHeader"
+                                class="rounded-xl border border-ink-200 px-4 py-2.5 text-[14px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
+                            Cancel
+                        </button>
+                        <button type="button" wire:click="saveHeader"
+                                class="rounded-xl bg-brand-600 px-5 py-2.5 text-[14px] font-bold text-white shadow-sm shadow-brand-600/25 transition hover:bg-brand-700 active:scale-95">
+                            Save header
+                        </button>
+                    </div>
+                </footer>
+            </div>
+        </div>
+    @endif
+
+    {{-- Editor: tasks on the left, the report on the right --}}
     @if ($writingDepartment)
         <div class="fixed inset-0 z-50 grid place-items-end bg-ink-950/50 p-0 backdrop-blur-[2px] sm:place-items-center sm:p-4"
+             wire:key="report-dialog-{{ $writingDepartment->id }}-{{ $editorSession }}"
              x-on:keydown.escape.window="$wire.cancelWriting()">
-            <div class="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
-                <header class="flex shrink-0 items-start gap-3 border-b border-ink-200/80 px-6 py-4 dark:border-ink-800">
-                    <span class="mt-1.5 size-3 shrink-0 rounded-full" style="background-color: {{ $writingDepartment->color }}"></span>
+            <div class="flex max-h-[94dvh] w-full max-w-5xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl dark:bg-ink-900">
+                <header class="flex shrink-0 items-center gap-3 border-b border-ink-200/80 px-6 py-4 dark:border-ink-800">
+                    <span class="size-3 shrink-0 rounded-full" style="background-color: {{ $writingDepartment->color }}"></span>
                     <div class="min-w-0 flex-1">
                         <h2 class="truncate text-lg font-bold tracking-tight">{{ $writingDepartment->name }}</h2>
                         <p class="text-[12px] text-ink-400">Report for {{ $this->day()->format('l, j F Y') }}</p>
                     </div>
+
+                    @can('manageReportHeader', $writingDepartment)
+                        <button type="button" wire:click="editHeader({{ $writingDepartment->id }})"
+                                class="shrink-0 rounded-xl border border-ink-200 px-3 py-1.5 text-[13px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
+                            {{ $writingDepartment->report_header ? 'Edit header' : 'Design header' }}
+                        </button>
+                    @endcan
+
                     <button type="button" wire:click="cancelWriting" aria-label="Close"
                             class="grid size-8 shrink-0 place-items-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 dark:hover:bg-ink-800">✕</button>
                 </header>
 
-                <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-                    {{-- What this department was doing, so the report can be
-                         written from it rather than from memory. --}}
+                {{-- Two columns on a wide screen, stacked on a narrow one, so
+                     the day's tasks stay readable while the report is written. --}}
+                <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
                     @if ($writingTasks->isNotEmpty())
                         @php $doneCount = $writingTasks->where('status', 'done')->count(); @endphp
-                        <div class="mb-4 rounded-xl border border-ink-200 p-3 dark:border-ink-700">
-                            <div class="mb-2 flex flex-wrap items-center gap-2">
+                        <aside class="min-h-0 shrink-0 overflow-y-auto border-b border-ink-200/80 bg-ink-50/60 px-5 py-4 lg:w-80 lg:border-b-0 lg:border-r dark:border-ink-800 dark:bg-ink-950/30">
+                            <div class="mb-3 flex items-center gap-2">
                                 <h3 class="text-[11px] font-bold uppercase tracking-wider text-ink-400">
-                                    Today's tasks · {{ $doneCount }}/{{ $writingTasks->count() }} done
+                                    Today · {{ $doneCount }}/{{ $writingTasks->count() }} done
                                 </h3>
                                 <button type="button" wire:click="insertAllTasks"
-                                        class="ml-auto rounded-lg border border-ink-200 px-2.5 py-1 text-[12px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800">
-                                    Add all to report
+                                        class="ml-auto rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-[12px] font-bold transition hover:bg-ink-50 dark:border-ink-700 dark:bg-ink-800 dark:hover:bg-ink-700">
+                                    Add all
                                 </button>
                             </div>
 
-                            <ul class="flex flex-col gap-1">
+                            <ul class="flex flex-col gap-2">
                                 @foreach ($writingTasks as $task)
-                                    <li class="flex flex-wrap items-center gap-2 rounded-lg px-2 py-1.5 transition hover:bg-ink-50 dark:hover:bg-ink-800"
+                                    <li class="rounded-xl border border-ink-200 bg-white p-2.5 dark:border-ink-700 dark:bg-ink-800"
                                         wire:key="edit-task-{{ $task->id }}">
-                                        <span class="size-2 shrink-0 rounded-full" style="background-color: {{ $task->statusMeta()['color'] }}"></span>
+                                        <div class="flex items-start gap-2">
+                                            <span class="mt-1.5 size-2 shrink-0 rounded-full" style="background-color: {{ $task->statusMeta()['color'] }}"></span>
+                                            <span class="min-w-0 flex-1 break-words text-[13px] font-bold leading-snug">{{ $task->title }}</span>
+                                            <button type="button" wire:click="insertTask({{ $task->id }})"
+                                                    class="shrink-0 rounded-lg px-2 py-0.5 text-[12px] font-bold text-brand-600 transition hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-950">
+                                                Add
+                                            </button>
+                                        </div>
 
-                                        <span class="min-w-0 flex-1 truncate text-[13px] font-semibold">{{ $task->title }}</span>
-
-                                        <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold"
-                                              style="background-color: {{ $task->priorityMeta()['color'] }}1a; color: {{ $task->priorityMeta()['color'] }}">
-                                            {{ $task->priorityMeta()['label'] }}
-                                        </span>
-
-                                        @if ($task->checklist_count > 0)
-                                            <span class="shrink-0 text-[12px] text-ink-400">
-                                                {{ $task->checklist_done_count }}/{{ $task->checklist_count }}
+                                        <div class="mt-1.5 flex flex-wrap items-center gap-1.5 pl-4 text-[11px]">
+                                            <span class="rounded-full px-1.5 py-0.5 font-bold"
+                                                  style="background-color: {{ $task->priorityMeta()['color'] }}1a; color: {{ $task->priorityMeta()['color'] }}">
+                                                {{ $task->priorityMeta()['label'] }}
                                             </span>
-                                        @endif
+                                            <span class="text-ink-400">{{ $task->statusMeta()['short'] }}</span>
 
-                                        @if ($task->assignee)
-                                            <span class="shrink-0 text-[12px] text-ink-400">{{ $task->assignee->name }}</span>
-                                        @endif
+                                            @if ($task->checklist_count > 0)
+                                                <span class="text-ink-400">· {{ $task->checklist_done_count }}/{{ $task->checklist_count }}</span>
+                                            @endif
 
-                                        <button type="button" wire:click="insertTask({{ $task->id }})"
-                                                class="shrink-0 rounded-lg px-2 py-1 text-[12px] font-bold text-brand-600 transition hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-950">
-                                            Add
-                                        </button>
+                                            @if ($task->assignee)
+                                                <span class="truncate text-ink-400">· {{ $task->assignee->name }}</span>
+                                            @endif
+                                        </div>
                                     </li>
                                 @endforeach
                             </ul>
-                        </div>
+                        </aside>
                     @endif
 
-                    {{--
-                        wire:ignore is load-bearing: Trix rewrites this subtree
-                        as the user types, and letting Livewire morph it would
-                        wipe the editor mid-sentence. The key rebuilds it when
-                        the department or the day changes, so a second report
-                        never opens with the first one's text.
+                    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                        @if ($writingHeader !== '')
+                            {{-- What a reader will see above this report. Shown
+                                 rather than typed into the body, so it cannot
+                                 drift from one day to the next. --}}
+                            <div class="mb-4 rounded-xl border border-dashed border-ink-200 px-4 py-3 dark:border-ink-700">
+                                <p class="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-400">Header</p>
+                                <div class="rich-text text-ink-600 dark:text-ink-300">{!! $writingHeader !!}</div>
+                            </div>
+                        @endif
 
-                        `$wire.set(..., false)` stores the value without a round
-                        trip — re-rendering on every keystroke would be both
-                        wasteful and, with wire:ignore, out of step.
-                    --}}
-                    <div wire:ignore wire:key="editor-{{ $writingDepartment->id }}-{{ $date }}" x-data>
-                        <input id="report-body-input" type="hidden" value="{{ $form_body }}">
-                        <trix-editor input="report-body-input"
-                                     placeholder="What happened today?"
-                                     x-on:trix-change="$wire.set('form_body', $event.target.value, false)"></trix-editor>
+                        <x-rich-text-editor
+                            model="form_body"
+                            :value="$form_body"
+                            placeholder="What happened today?"
+                            key="report-editor-{{ $writingDepartment->id }}-{{ $date }}-{{ $editorSession }}" />
+
+                        @error('form_body')
+                            <p class="mt-2 text-[13px] font-medium text-red-600">{{ $message }}</p>
+                        @enderror
                     </div>
-
-                    @error('form_body')
-                        <p class="mt-2 text-[13px] font-medium text-red-600">{{ $message }}</p>
-                    @enderror
                 </div>
 
                 <footer class="flex shrink-0 items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">

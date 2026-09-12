@@ -1,129 +1,114 @@
 /*
- * Rich-text editing for daily reports.
+ * Rich-text editing for reports and notes.
  *
- * Trix is ~50KB gzipped and only one page uses it, so it is a dynamic import
- * rather than part of the main bundle — /login should not pay for an editor
- * it never shows. Custom elements upgrade whenever their definition lands, so
- * loading after the <trix-editor> is in the DOM is fine.
+ * Quill is ~45KB gzipped and only a few dialogs use it, so it is a dynamic
+ * import rather than part of the main bundle — /login should not pay for an
+ * editor it never shows. The promise is memoised, so a second editor on the
+ * page reuses the first load.
  */
-const loadTrix = (() => {
+const loadQuill = (() => {
     let pending;
 
-    return () => (pending ??= import('trix'));
+    return () => (pending ??= import('quill').then((module) => module.default));
 })();
 
 /*
- * The editor arrives inside a Livewire modal, long after first paint, so the
- * page is watched until one shows up. The observer disconnects on the first
- * hit; the module is cached from then on.
- */
-const watchForEditor = () => {
-    if (document.querySelector('trix-editor')) {
-        loadTrix();
-
-        return;
-    }
-
-    new MutationObserver((_records, observer) => {
-        if (document.querySelector('trix-editor')) {
-            observer.disconnect();
-            loadTrix();
-        }
-    }).observe(document.body, { childList: true, subtree: true });
-};
-
-document.addEventListener('DOMContentLoaded', watchForEditor);
-document.addEventListener('livewire:navigated', watchForEditor);
-
-/*
- * Trix offers file attachments by default, but there is no upload endpoint
- * behind them: a dropped file would be embedded as a data: URL that the
- * sanitiser then strips, losing it silently. Refusing up front is honest
- * about what a report or note can hold. The toolbar's paperclip is hidden in
- * CSS for the same reason.
- */
-addEventListener('trix-file-accept', (event) => event.preventDefault());
-
-/*
- * Writing a task into the open editor.
+ * What the editor is allowed to produce.
  *
- * The report page dispatches this rather than setting the Livewire property,
- * because the editor sits behind wire:ignore — anything written server-side
- * would not appear until the dialog was reopened. Inserting through Trix's own
- * API also means the change fires trix-change, so the property stays in step
- * without anything special.
+ * Deliberately the same shortlist the server allows (config/purifier.php):
+ * anything else — colours, fonts, images, tables — would be typed happily and
+ * then stripped on save, which reads as the editor losing your work. Capping
+ * it here means what you see is what is stored.
  */
-addEventListener('report-insert', (event) => {
-    const element = document.querySelector('trix-editor');
-    const html = event.detail?.html ?? event.detail?.[0]?.html;
+const FORMATS = ['bold', 'italic', 'strike', 'header', 'blockquote', 'code-block', 'list', 'link'];
 
-    if (!element?.editor || !html) {
-        return;
-    }
+document.addEventListener('alpine:init', () => {
+    window.Alpine.data('quillEditor', (model, value = '', placeholder = '') => ({
+        quill: null,
 
-    element.focus();
-    element.editor.insertHTML(html);
-});
+        /** Where the cursor was, so inserts land there and not at the top. */
+        lastRange: null,
 
-/*
- * Word-style tooltips.
- *
- * Trix labels its buttons "Bullets", "Numbers", "Increase Level" — accurate,
- * but not what a word processor calls them, and with no hint that ⌘B works.
- * Naming them the way people already expect, and spelling out the shortcut,
- * is most of what makes a toolbar readable.
- */
-const BUTTON_TITLES = {
-    bold: 'Bold',
-    italic: 'Italic',
-    strike: 'Strikethrough',
-    href: 'Insert link',
-    heading1: 'Heading',
-    quote: 'Quote',
-    code: 'Code block',
-    bullet: 'Bulleted list',
-    number: 'Numbered list',
-    decreaseNestingLevel: 'Decrease indent',
-    increaseNestingLevel: 'Increase indent',
-    undo: 'Undo',
-    redo: 'Redo',
-};
+        /** Anything asked for before Quill finished loading. */
+        queued: [],
 
-/** ⌘ on a Mac, Ctrl everywhere else — the same convention Word follows. */
-const modifierKey = () =>
-    /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl+';
+        async mount() {
+            const Quill = await loadQuill();
 
-const shortcutHint = (key) => {
-    if (!key) {
-        return '';
-    }
+            this.quill = new Quill(this.$refs.editor, {
+                placeholder,
+                formats: FORMATS,
+                modules: { toolbar: this.$refs.toolbar },
+            });
 
-    const parts = key.split('+');
-    const letter = parts.pop().toUpperCase();
-    const shift = parts.includes('shift') ? 'Shift+' : '';
+            if (value) {
+                // 'silent' so restoring the saved body is not itself an edit.
+                this.quill.clipboard.dangerouslyPasteHTML(value, 'silent');
+            }
 
-    return ` (${modifierKey()}${shift}${letter})`;
-};
+            this.quill.on('text-change', () => {
+                // Third argument false: store the value without a round trip.
+                // Re-rendering on every keystroke would be wasteful and, behind
+                // wire:ignore, out of step with what is on screen.
+                this.$wire.set(model, this.html(), false);
+            });
 
-addEventListener('trix-initialize', (event) => {
-    const toolbar = event.target.toolbarElement;
+            // Clicking a button outside the editor blurs it and clears Quill's
+            // selection, so the last real cursor position is remembered here.
+            this.quill.on('selection-change', (range) => {
+                if (range) {
+                    this.lastRange = range;
+                }
+            });
 
-    if (!toolbar) {
-        return;
-    }
+            // Quill loads asynchronously; anything clicked in the meantime was
+            // parked rather than dropped.
+            this.queued.splice(0).forEach((html) => this.insert(html));
+        },
 
-    toolbar.querySelectorAll('button[data-trix-attribute], button[data-trix-action]').forEach((button) => {
-        const name = button.dataset.trixAttribute || button.dataset.trixAction;
-        const label = BUTTON_TITLES[name];
+        /**
+         * Quill 2 renders *both* list types in the DOM as <ul> with the real
+         * type hidden on `li[data-list]`. Saving innerHTML would therefore
+         * turn every numbered list into bullets once the sanitiser dropped
+         * that attribute. getSemanticHTML() emits proper <ol>/<ul> instead.
+         */
+        html() {
+            if (!this.quill) {
+                return '';
+            }
 
-        if (!label) {
-            return;
-        }
+            // An untouched editor still holds "<p><br></p>", which is markup
+            // but not a report.
+            return this.quill.getText().trim() === '' ? '' : this.quill.getSemanticHTML().trim();
+        },
 
-        button.setAttribute('title', label + shortcutHint(button.dataset.trixKey));
-        // The button's text is its accessible name; the icon covers it visually.
-        button.setAttribute('aria-label', label);
-    });
+        /**
+         * Writes markup in at the cursor — a task pulled into a report, or a
+         * self-filling field dropped into a header.
+         */
+        insert(html) {
+            if (!html) {
+                return;
+            }
+
+            if (!this.quill) {
+                this.queued.push(html);
+
+                return;
+            }
+
+            // End of the document when nothing has been clicked yet. getLength()
+            // counts Quill's trailing newline, hence the -1.
+            const index = this.lastRange?.index ?? Math.max(this.quill.getLength() - 1, 0);
+
+            this.quill.clipboard.dangerouslyPasteHTML(index, html, 'user');
+
+            // dangerouslyPasteHTML moves the cursor silently, so selection-change
+            // does not fire and lastRange would otherwise go stale.
+            this.lastRange = this.quill.getSelection() ?? { index: this.quill.getLength() - 1, length: 0 };
+            this.quill.focus();
+        },
+    }));
 });
 
 /*

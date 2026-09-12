@@ -32,7 +32,7 @@ class RichTextService
         // lines rather than "onetwo". They are kept rather than flattened to
         // spaces because callers still care where the first line ends — an
         // untitled note takes its heading from it.
-        $broken = preg_replace('#<(br|/p|/div|/li|/h1|/blockquote|/pre)\s*/?>#i', "\n", $html);
+        $broken = preg_replace('#<(br|/p|/div|/li|/h1|/h2|/blockquote|/pre)\s*/?>#i', "\n", $html);
 
         $text = html_entity_decode(strip_tags((string) $broken), ENT_QUOTES | ENT_HTML5);
 

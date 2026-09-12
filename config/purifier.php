@@ -33,20 +33,22 @@ return [
         ],
         /*
          * Rich text — daily reports and notes. The allowlist is exactly what
-         * Trix can emit and
+         * the editor can emit and
          * nothing else — no img, no iframe, no style attributes, no inline
          * CSS — so a crafted paste or a hand-rolled PATCH cannot smuggle
          * script or a tracking pixel into something every member will read.
          */
         'rich_text' => [
             'HTML.Doctype' => 'HTML 4.01 Transitional',
-            'HTML.Allowed' => 'div,br,strong,em,del,a[href],h1,blockquote,pre,ul,ol,li,p',
+            // `s` and `h2` are what the editor writes; `del` and `div` are
+            // kept because everything written before it does still has them.
+            'HTML.Allowed' => 'div,p,br,strong,em,s,del,a[href],h1,h2,blockquote,pre,ul,ol,li',
             'CSS.AllowedProperties' => '',
             // javascript: and data: URLs never survive this.
             'URI.AllowedSchemes' => ['http' => true, 'https' => true, 'mailto' => true],
             'HTML.TargetBlank' => true,
             'HTML.Nofollow' => true,
-            // Trix lays paragraphs out in divs; auto-paragraphing rewrites them.
+            // The editor lays its own blocks out; auto-paragraphing rewrites them.
             'AutoFormat.AutoParagraph' => false,
             'AutoFormat.RemoveEmpty' => true,
         ],

@@ -83,10 +83,10 @@ class ReportPageTest extends TestCase
         Livewire::actingAs($this->owner)
             ->test('pages::reports')
             ->call('startWriting', $this->department->id)
-            ->assertSee('<trix-editor', escape: false)
-            ->assertSee('input="report-body-input"', escape: false)
-            // Without wire:ignore, Livewire morphs the subtree Trix owns and
-            // wipes what is being typed.
+            ->assertSee('rich-editor', escape: false)
+            ->assertSee('quillEditor(', escape: false)
+            // Without wire:ignore, Livewire morphs the subtree the editor owns
+            // and wipes what is being typed.
             ->assertSee('wire:ignore', escape: false);
     }
 
@@ -111,7 +111,7 @@ class ReportPageTest extends TestCase
         Livewire::actingAs($this->owner)
             ->test('pages::reports')
             ->call('startWriting', $this->department->id)
-            // What Trix sends when nobody typed anything.
+            // What an untouched editor sends.
             ->set('form_body', '<div><br></div>')
             ->call('save')
             ->assertHasErrors('form_body')
@@ -141,6 +141,35 @@ class ReportPageTest extends TestCase
         // Corrected in place rather than filed as a second report for the day.
         $this->assertSame(1, Report::count());
         $this->assertSame('Second draft', $report->fresh()->body_text);
+    }
+
+    /**
+     * An existing body is handed to the editor through an HTML attribute, so
+     * its quotes and apostrophes have to survive the trip — otherwise the
+     * attribute closes early and the markup around it falls apart.
+     */
+    public function test_an_existing_body_is_loaded_into_the_editor_safely(): void
+    {
+        $body = '<p>She said "it\'s done" &amp; left</p><ul><li>one</li></ul>';
+
+        Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now($this->tenant->timezone)->toDateString(),
+            'body' => $body,
+            'body_text' => 'She said "it\'s done" & left one',
+        ]);
+
+        $html = Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('startWriting', $this->department->id)
+            ->assertSet('form_body', $body)
+            ->html();
+
+        // The raw quotes must not appear inside the x-data attribute.
+        $this->assertStringContainsString('x-data="quillEditor(', $html);
+        $this->assertStringNotContainsString('quillEditor(\'form_body\', \'<p>She said "', $html);
     }
 
     public function test_a_report_opens_in_a_read_dialog(): void
@@ -232,7 +261,7 @@ class ReportPageTest extends TestCase
             ->assertSee('Open the shop')
             ->assertSee('2/3')
             ->assertSee('High')
-            ->assertSee('Add all to report');
+            ->assertSee('Add all');
     }
 
     /**
@@ -248,7 +277,7 @@ class ReportPageTest extends TestCase
             ->call('startWriting', $this->department->id)
             ->call('insertTask', $task->id)
             ->assertDispatched(
-                'report-insert',
+                'rich-text-insert',
                 fn (string $event, array $params) => str_contains($params['html'], 'Open the shop')
                     && str_contains($params['html'], 'In Progress')
                     && str_contains($params['html'], '2/3 checklist'),
@@ -265,7 +294,7 @@ class ReportPageTest extends TestCase
             ->call('startWriting', $this->department->id)
             ->call('insertAllTasks')
             ->assertDispatched(
-                'report-insert',
+                'rich-text-insert',
                 fn (string $event, array $params) => str_starts_with($params['html'], '<ul>')
                     && str_contains($params['html'], 'Open the shop')
                     && str_contains($params['html'], 'Weekly stock count'),
@@ -282,7 +311,7 @@ class ReportPageTest extends TestCase
             ->call('startWriting', $this->department->id)
             ->call('insertTask', $task->id)
             ->assertDispatched(
-                'report-insert',
+                'rich-text-insert',
                 fn (string $event, array $params) => ! str_contains($params['html'], '<script>')
                     && str_contains($params['html'], '&lt;script&gt;'),
             );

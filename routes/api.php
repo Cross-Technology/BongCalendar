@@ -81,6 +81,8 @@ Route::prefix('v1')->group(function () {
             // Who works in a department. Membership scopes work — it decides
             // where a task lands and what the reports page leads with — rather
             // than hiding anything from the rest of the workspace.
+            Route::put('departments/{department}/report-header', [DepartmentController::class, 'updateReportHeader']);
+
             Route::get('departments/{department}/members', [DepartmentController::class, 'members']);
             Route::post('departments/{department}/members', [DepartmentController::class, 'addMember']);
             Route::delete('departments/{department}/members/{user}', [DepartmentController::class, 'removeMember']);

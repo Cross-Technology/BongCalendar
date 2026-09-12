@@ -366,10 +366,40 @@ class NotePageTest extends TestCase
         Livewire::actingAs($this->owner)
             ->test('pages::notes')
             ->call('create')
-            ->assertSee('<trix-editor', escape: false)
-            ->assertSee('input="note-body-input"', escape: false)
-            // Without wire:ignore, Livewire morphs the subtree Trix owns.
+            ->assertSee('rich-editor', escape: false)
+            ->assertSee('quillEditor(', escape: false)
+            // Without wire:ignore, Livewire morphs the subtree the editor owns
+            // and wipes what is being typed.
             ->assertSee('wire:ignore', escape: false);
+    }
+
+    /**
+     * Same trap as the report header: behind wire:ignore a repeating wire:key
+     * makes the morph reuse the element, so the editor opens showing the
+     * previous note's text instead of this one's.
+     */
+    public function test_opening_the_editor_again_rebuilds_it(): void
+    {
+        $first = Note::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'author_id' => $this->owner->id,
+            'body' => '<p>First note</p>',
+            'body_text' => 'First note',
+        ]);
+
+        $component = Livewire::actingAs($this->owner)
+            ->test('pages::notes')
+            ->call('edit', $first->id);
+
+        preg_match('/wire:key="(note-editor-[^"]+)"/', $component->html(), $opened);
+        $this->assertNotEmpty($opened, 'The note editor should carry a wire:key.');
+
+        // The same note, opened a second time.
+        $component->call('save')->call('edit', $first->id);
+
+        preg_match('/wire:key="(note-editor-[^"]+)"/', $component->html(), $reopened);
+
+        $this->assertNotSame($opened[1], $reopened[1], 'The editor must be rebuilt on each opening.');
     }
 
     public function test_the_editor_strips_dangerous_markup_before_saving(): void
@@ -395,7 +425,7 @@ class NotePageTest extends TestCase
         Livewire::actingAs($this->owner)
             ->test('pages::notes')
             ->call('create')
-            // What Trix posts when nobody typed anything.
+            // What an untouched editor posts.
             ->set('form_body', '<div><br></div>')
             ->call('save')
             ->assertHasErrors('form_body');

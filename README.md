@@ -163,6 +163,7 @@ rights — so `owner` is rejected as a role, and the owner's row is refused.
 | GET / POST | `/departments` | |
 | GET / PATCH / DELETE | `/departments/{department}` | Admin-only to change. |
 | POST | `/departments/{department}/calendars` | Move a calendar in, or out of every department. |
+| PUT | `/departments/{department}/report-header` | `report_header` (HTML). Send nothing to clear it. Open to the department's members, not just admins. |
 | GET / POST | `/departments/{department}/members` | POST takes `user_id` and an optional `role` of `lead` or `member`. |
 | DELETE | `/departments/{department}/members/{user}` | |
 
@@ -214,6 +215,18 @@ default (`visibility: tenant`); its author can keep it to themselves with
 | POST | `/notes/{note}/attachments` | `multipart/form-data` with `file`. |
 | GET / DELETE | `/attachments/{attachment}` | Streams or removes one file. |
 
+**Each department styles its own report header.** It is designed in the same
+editor as a report, stored once on the department, and rendered *above* every
+report it files — never mixed into the body, so it cannot drift day to day.
+Anyone in the department can design it (see `DepartmentPolicy::manageReportHeader`);
+workspace admins can too.
+
+Headers carry fields that fill themselves in at render time — `{{department}}`,
+`{{date}}`, `{{author}}`, `{{workspace}}` — so the date never needs retyping.
+Values are escaped before they go into the stored markup: a department called
+`Sales & <Ops>` reads as text rather than reopening the hole the sanitiser
+closes.
+
 The report editor shows that department's tasks for the day — status, priority,
 checklist progress and assignee — with **Add** on each and **Add all to report**,
 which write them into the editor as formatted lines. The day's list also shows a
@@ -239,7 +252,7 @@ a day stays with its author or an admin.
 
 ### Rich text and attachments
 
-Reports and notes are both written in a rich-text editor (Trix), and both store
+Reports and notes are both written in a rich-text editor (Quill), and both store
 sanitised HTML in `body` alongside a plain-text `body_text` used for search and
 previews — searching the markup would match tag names and miss any phrase a bold
 tag happens to split.
@@ -250,6 +263,20 @@ rendered back as markup to a whole workspace, so everything funnels through
 `config/purifier.php` — an allowlist of exactly what the editor emits. `script`,
 `img`, `iframe`, `on*` handlers, inline CSS and `javascript:` URLs do not survive
 it. Nothing but `RichTextService` should write those columns.
+
+The editor is one Blade component, `<x-rich-text-editor>`, used by reports,
+report headers and notes. Only Quill's *core* stylesheet is loaded — the toolbar
+markup is ours — and the format list it offers is deliberately the same shortlist
+`config/purifier.php` allows, so nothing can be typed that the server then
+strips.
+
+One Quill quirk worth knowing: in the DOM it renders **both** list types as
+`<ul>` with the real type hidden on `li[data-list]`. Saving `innerHTML` would
+turn every numbered list into bullets the moment the sanitiser dropped that
+attribute, so the editor saves `getSemanticHTML()` instead, which emits proper
+`<ol>`/`<ul>`. For the same reason list markers are styled for `.rich-text`
+only: inside the editor Quill draws its own, and dressing them twice shows two
+bullets per line.
 
 **Attachments** (notes today; the table is polymorphic, so reports are the
 obvious next one) accept PDF, Word, Excel and ordinary images up to **5 MB**.
