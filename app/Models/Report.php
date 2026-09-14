@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\RecordsActivity;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -24,7 +25,7 @@ use Illuminate\Support\Str;
 #[Fillable(['tenant_id', 'department_id', 'author_id', 'last_editor_id', 'report_date', 'body', 'body_text'])]
 class Report extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory, RecordsActivity, SoftDeletes;
 
     protected function casts(): array
     {
@@ -150,5 +151,45 @@ class Report extends Model
     public function wasEdited(): bool
     {
         return $this->last_editor_id !== null && $this->updated_at->gt($this->created_at->addMinute());
+    }
+
+    /* ---------------------------------------------------------------- audit */
+
+    /**
+     * `body_text` is the body again with the markup taken out, and
+     * `last_editor_id` is whoever the entry is already filed against — both
+     * would only repeat what is beside them.
+     */
+    protected function activityIgnored(): array
+    {
+        return ['body_text', 'last_editor_id', 'tenant_id', 'department_id', 'report_date'];
+    }
+
+    /**
+     * A report body is a page of HTML. Keeping two copies of it per edit would
+     * make the trail several times the size of the thing it describes, so an
+     * entry records that the report was rewritten and the report itself is
+     * where you read what it now says.
+     */
+    protected function activityOpaque(): array
+    {
+        return ['body'];
+    }
+
+    protected function activityLabels(): array
+    {
+        return [
+            'body' => 'Report',
+            'author_id' => 'Author',
+        ];
+    }
+
+    public function activityValue(string $field, mixed $value): ?string
+    {
+        if ($field === 'author_id' && $value) {
+            return User::find($value)?->name ?? 'Unknown user';
+        }
+
+        return $this->defaultActivityValue($value);
     }
 }

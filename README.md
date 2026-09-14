@@ -90,6 +90,9 @@ tenants ─┬─< tenant_user >─┬─ users
   members can read) or `public`.
 - **Access to a calendar** resolves to one of `manage` (owner, or a `manage` share), `edit`,
   `view`, or none — see `Calendar::permissionFor()`.
+- **Activity** is the audit trail: one row per thing that happened to a task or a report — who
+  did it, when, and what changed. Polymorphic, because the question is the same whatever is
+  being asked about. See the API's [audit trail](#audit-trail).
 - **Event times are stored in UTC.** The `timezone` column records the wall-clock zone the event
   was authored in, so the original local time survives a DST or zone change.
 
@@ -236,6 +239,45 @@ a day stays with its author or an admin.
 | GET | `/reports/daily` | `?date=` — every department with its report or `null`, plus `reported` / `missing` counts. Answers "who still owes a report today?", which the index cannot: a department that never reported has no row. |
 | POST | `/reports` | `department_id`, `report_date`, `body`. An **upsert** — posting twice for a day corrects that day rather than failing on the unique index. `201` on the first write, `200` after. |
 | GET / PATCH / DELETE | `/reports/{report}` | PATCH takes `body` only; the department and the day are fixed at creation. |
+
+### Audit trail
+
+Tasks and reports keep a record of who did what to them. `GET /tasks/{task}` and
+`GET /reports/{report}` carry it as `activity`, newest entry first:
+
+```json
+"activity": [
+  {
+    "id": 412,
+    "action": "updated",
+    "action_label": "edited",
+    "user_id": 7,
+    "actor_name": "Sokha",
+    "changes": [
+      { "label": "Status", "from": "Todo", "to": "Completed", "opaque": false },
+      { "label": "Due date", "from": "2026-09-12 09:00", "to": "2026-09-13 09:00", "opaque": false }
+    ],
+    "created_at": "2026-09-12T07:41:55.000000Z"
+  },
+  { "id": 380, "action": "created", "actor_name": "Dara", "changes": [], "created_at": "..." }
+]
+```
+
+- `action` is one of `created`, `updated`, `deleted`, `restored`.
+- `changes` is already resolved to labels and names — "Completed", not `done`; a
+  person, not an id — because an entry records a moment, and a department renamed
+  next month must not rewrite what last month's entry says.
+- `opaque: true` means the field changed but its content is not kept. Report
+  bodies are opaque: two copies of a page of HTML per edit would make the trail
+  several times the size of the thing it describes.
+- `actor_name` is `System` when nothing was signed in — the seeder, a console
+  command or the recurrence job.
+
+The trail is written by `App\Models\Concerns\RecordsActivity`, hooked onto the
+model's own events rather than onto each caller: a task is written from six
+places, and a trail with holes in it reads as "nobody touched this". It outlives
+what it describes, since a deleted task is exactly the one somebody asks about
+afterwards.
 
 ### Rich text and attachments
 

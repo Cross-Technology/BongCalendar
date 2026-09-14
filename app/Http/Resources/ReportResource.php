@@ -29,6 +29,7 @@ class ReportResource extends JsonResource
             'can_delete' => $user ? $user->can('delete', $this->resource) : false,
             'author' => new UserResource($this->whenLoaded('author')),
             'last_editor' => new UserResource($this->whenLoaded('lastEditor')),
+            'activity' => ActivityResource::collection($this->whenLoaded('activities')),
             'department' => new DepartmentResource($this->whenLoaded('department')),
             // Read receipts, only when they were asked for — an index that
             // loaded them for every row would be a query per report.

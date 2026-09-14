@@ -128,7 +128,9 @@ class ReportController extends Controller
         $this->reports->markSeen($report, $request->user());
 
         return response()->json([
-            'data' => new ReportResource($report->load(['department', 'author', 'lastEditor', 'views.user'])),
+            'data' => new ReportResource($report->load([
+                'department', 'author', 'lastEditor', 'views.user', 'activities.user:id,name',
+            ])),
         ]);
     }
 

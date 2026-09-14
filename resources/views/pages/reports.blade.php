@@ -204,8 +204,11 @@ class extends Component
             return null;
         }
 
-        $report = Report::with(['author', 'lastEditor', 'department', 'views.user:id,name'])
-            ->find($this->viewingId);
+        $report = Report::with([
+            'author', 'lastEditor', 'department', 'views.user:id,name',
+            // The audit trail, for the history strip under the body.
+            'activities.user:id,name',
+        ])->find($this->viewingId);
 
         if (! $report || $this->currentUser()->cannot('view', $report)) {
             $this->viewingId = null;
@@ -455,9 +458,15 @@ class extends Component
                                 {{ \Illuminate\Support\Str::of($report->author->name)->substr(0, 1)->upper() }}
                             </span>
                             <span class="font-semibold text-ink-500 dark:text-ink-400">{{ $report->author->name }}</span>
+                            <span title="{{ $report->created_at->setTimezone($this->userTimezone())->format('l, j F Y, H:i') }}">
+                                · wrote this {{ $report->created_at->setTimezone($this->userTimezone())->format('j M, H:i') }}
+                            </span>
 
                             @if ($report->lastEditor && $report->last_editor_id !== $report->author_id)
-                                <span>· last edited by {{ $report->lastEditor->name }}</span>
+                                <span title="{{ $report->updated_at->setTimezone($this->userTimezone())->format('l, j F Y, H:i') }}">
+                                    · last edited by {{ $report->lastEditor->name }},
+                                    {{ $report->updated_at->setTimezone($this->userTimezone())->format('j M, H:i') }}
+                                </span>
                             @endif
 
                             <span class="ml-auto flex flex-wrap gap-2">
@@ -596,6 +605,34 @@ class extends Component
                      stored, and nothing else writes this column. --}}
                 <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                     <div class="rich-text text-ink-700 dark:text-ink-200">{!! $viewingReport->body !!}</div>
+                </div>
+
+                {{-- Who wrote it and who has changed it since. A day's report
+                     is the whole department's, so "who touched this?" is asked
+                     of it far more often than of anything else here. --}}
+                <div class="shrink-0 px-6">
+                    <x-activity-log :entries="$viewingReport->activities"
+                                    :timezone="$this->userTimezone()"
+                                    noun="report">
+                        <span class="flex items-center gap-1.5">
+                            <span class="grid size-5 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-[9px] font-bold text-white">
+                                {{ \Illuminate\Support\Str::of($viewingReport->author->name)->substr(0, 1)->upper() }}
+                            </span>
+                            Written by
+                            <span class="font-semibold text-ink-600 dark:text-ink-300">{{ $viewingReport->author->name }}</span>
+                        </span>
+                        <span title="{{ $viewingReport->created_at->setTimezone($this->userTimezone())->format('l, j F Y, H:i') }}">
+                            · {{ $viewingReport->created_at->setTimezone($this->userTimezone())->format('j M Y, H:i') }}
+                        </span>
+
+                        @if ($viewingReport->lastEditor && $viewingReport->wasEdited())
+                            <span>
+                                · last edited by
+                                <span class="font-semibold text-ink-600 dark:text-ink-300">{{ $viewingReport->lastEditor->name }}</span>
+                                {{ $viewingReport->updated_at->setTimezone($this->userTimezone())->format('j M Y, H:i') }}
+                            </span>
+                        @endif
+                    </x-activity-log>
                 </div>
 
                 @php $seen = $viewingReport->viewsExcept($this->currentUser()); @endphp

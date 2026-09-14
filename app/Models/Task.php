@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\RecordsActivity;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -26,7 +27,7 @@ use Illuminate\Support\Carbon;
 ])]
 class Task extends Model
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory, RecordsActivity, SoftDeletes;
 
     protected static function booted(): void
     {
@@ -438,5 +439,49 @@ class Task extends Model
     public function priorityMeta(): array
     {
         return self::PRIORITY_META[$this->priority] ?? self::PRIORITY_META['medium'];
+    }
+
+    /* ---------------------------------------------------------------- audit */
+
+    /**
+     * Board housekeeping, not edits anyone asked for: a card dragged between
+     * columns moves `position`, and `completed_at` only ever restates what the
+     * status entry beside it already says.
+     */
+    protected function activityIgnored(): array
+    {
+        return ['position', 'completed_at', 'series_id', 'tenant_id'];
+    }
+
+    protected function activityLabels(): array
+    {
+        return [
+            'created_by' => 'Creator',
+            'assignee_id' => 'Assignee',
+            'department_id' => 'Department',
+            'parent_task_id' => 'Parent task',
+            'start_date' => 'Start date',
+            'due_date' => 'Due date',
+        ];
+    }
+
+    /**
+     * Ids and codes read back as the names and labels they stand for — "Doing",
+     * not "in_progress"; a person, not a number.
+     */
+    public function activityValue(string $field, mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return match ($field) {
+            'status' => self::STATUS_META[$value]['label'] ?? (string) $value,
+            'priority' => self::PRIORITY_META[$value]['label'] ?? (string) $value,
+            'assignee_id', 'created_by' => User::find($value)?->name ?? 'Unknown user',
+            'department_id' => Department::withTrashed()->find($value)?->name ?? 'Unknown department',
+            'parent_task_id' => self::withTrashed()->find($value)?->title ?? 'Unknown task',
+            default => $this->defaultActivityValue($value),
+        };
     }
 }

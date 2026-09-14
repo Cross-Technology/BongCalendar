@@ -287,6 +287,8 @@ class TaskController extends Controller
                     'assignee:id,name,email', 'creator:id,name,email', 'department',
                     'assignees:id,name,email', 'departments',
                     'subtasks', 'checklist',
+                    // Who made it and who has changed what since.
+                    'activities.user:id,name',
                 ])
             ),
         ]);

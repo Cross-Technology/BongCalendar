@@ -1,4 +1,4 @@
-@props(['task', 'statusMeta', 'priorityMeta', 'timezone', 'departments', 'members', 'subtasks', 'checklist'])
+@props(['task', 'statusMeta', 'priorityMeta', 'timezone', 'departments', 'members', 'subtasks', 'checklist', 'activity' => null])
 
 @php
     $status = $statusMeta[$task->status];
@@ -268,11 +268,25 @@
             </p>
         @endif
 
-        <p class="border-t border-ink-200/70 pt-3 text-[12px] text-ink-400 dark:border-ink-800">
-            Created {{ $task->created_at->setTimezone($timezone)->format('j M Y, H:i') }}
+        {{-- Who made this and who has touched it since. The byline is read off
+             the task's own columns so it answers for tasks written before the
+             trail existed; the entries behind it are the trail itself. --}}
+        <x-activity-log :entries="$activity ?? $task->activities()->with('user')->get()"
+                        :timezone="$timezone"
+                        noun="task">
+            <span class="flex items-center gap-1.5">
+                <span class="grid size-5 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-[9px] font-bold text-white">
+                    {{ \Illuminate\Support\Str::of($task->creator?->name ?? '?')->substr(0, 1)->upper() }}
+                </span>
+                Created by
+                <span class="font-semibold text-ink-600 dark:text-ink-300">{{ $task->creator?->name ?? 'Unknown' }}</span>
+            </span>
+            <span title="{{ $task->created_at->setTimezone($timezone)->format('l, j F Y, H:i') }}">
+                · {{ $task->created_at->setTimezone($timezone)->format('j M Y, H:i') }}
+            </span>
             @if ($task->completed_at)
-                · Completed {{ $task->completed_at->setTimezone($timezone)->format('j M Y, H:i') }}
+                <span>· Completed {{ $task->completed_at->setTimezone($timezone)->format('j M Y, H:i') }}</span>
             @endif
-        </p>
+        </x-activity-log>
     </div>
 </aside>

@@ -45,6 +45,9 @@ class TaskResource extends JsonResource
             'assignee_ids' => $this->whenLoaded('assignees', fn () => $this->assignees->pluck('id')),
             'assignees' => UserResource::collection($this->whenLoaded('assignees')),
             'creator' => new UserResource($this->whenLoaded('creator')),
+            // The audit trail, only where it was asked for: an index that
+            // loaded it for every row would be a query per task.
+            'activity' => ActivityResource::collection($this->whenLoaded('activities')),
             'department' => new DepartmentResource($this->whenLoaded('department')),
             'subtasks' => TaskResource::collection($this->whenLoaded('subtasks')),
             'subtasks_count' => $this->whenCounted('subtasks'),

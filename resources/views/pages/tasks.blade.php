@@ -414,6 +414,13 @@ class extends Component
 
         return [
             'columns' => $columns,
+            // The task open in the modal, loaded with its trail so the form can
+            // say who made it and who has changed it since.
+            'editingTask' => $this->editingId
+                ? Task::forTenant($tenantId)
+                    ->with(['creator:id,name', 'activities.user:id,name'])
+                    ->find($this->editingId)
+                : null,
             'shown' => $tasks->count(),
             // What the board holds with no filters on, so the header can say
             // "12 of 240" rather than leaving you to wonder what is hidden.
@@ -844,6 +851,24 @@ class extends Component
                             <label class="{{ $label }}">Note <span class="font-medium text-ink-400">(working notes)</span></label>
                             <textarea wire:model="form_note" rows="2" class="{{ $field }}"></textarea>
                         </div>
+
+                        {{-- Who made this task and what has been changed on it
+                             since. Only on an edit: a task being created has
+                             no history to show yet. --}}
+                        @if ($editingTask)
+                            <x-activity-log :entries="$editingTask->activities" :timezone="$timezone" noun="task">
+                                <span class="flex items-center gap-1.5">
+                                    <span class="grid size-5 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-[9px] font-bold text-white">
+                                        {{ Str::of($editingTask->creator?->name ?? '?')->substr(0, 1)->upper() }}
+                                    </span>
+                                    Created by
+                                    <span class="font-semibold text-ink-600 dark:text-ink-300">{{ $editingTask->creator?->name ?? 'Unknown' }}</span>
+                                </span>
+                                <span title="{{ $editingTask->created_at->setTimezone($timezone)->format('l, j F Y, H:i') }}">
+                                    · {{ $editingTask->created_at->setTimezone($timezone)->format('j M Y, H:i') }}
+                                </span>
+                            </x-activity-log>
+                        @endif
                     </div>
 
                     <footer class="mt-2 flex items-center gap-3 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">

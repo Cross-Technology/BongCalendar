@@ -221,7 +221,8 @@ class extends Component
         }
 
         return Task::forTenant($this->requireTenant()->id)
-            ->with(['departments:id,name,color,position', 'assignees:id,name'])
+            // `creator` and the trail are what the panel's history reads from.
+            ->with(['departments:id,name,color,position', 'assignees:id,name', 'creator:id,name'])
             ->find($this->taskId);
     }
 
@@ -815,6 +816,11 @@ class extends Component
                 ? Task::where('parent_task_id', $activeTask->id)->boardOrder()->get()
                 : collect(),
             'checklist' => $activeTask ? $activeTask->checklist()->get() : collect(),
+            // Loaded here rather than inside the panel so the whole sidebar is
+            // one pass, and so a closed sidebar costs nothing.
+            'activity' => $activeTask
+                ? $activeTask->activities()->with('user:id,name')->get()
+                : collect(),
             'departmentList' => Department::forTenant($tenantIdForView)->get(),
             'memberList' => $this->currentTenant()->users()->orderBy('name')->get(['users.id', 'users.name']),
             'statusMeta' => Task::STATUS_META,
@@ -1226,6 +1232,7 @@ class extends Component
     {{-- ────────────────────────── Task detail sidebar ───────────────────────── --}}
     @if ($activeTask)
         <x-task-detail :task="$activeTask"
+                       :activity="$activity"
                        :status-meta="$statusMeta"
                        :priority-meta="$priorityMeta"
                        :timezone="$timezone"
