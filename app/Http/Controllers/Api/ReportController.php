@@ -120,12 +120,15 @@ class ReportController extends Controller
         );
     }
 
-    public function show(Report $report): JsonResponse
+    /** Fetching one report is someone reading it, so it leaves a receipt. */
+    public function show(Request $request, Report $report): JsonResponse
     {
         $this->authorize('view', $report);
 
+        $this->reports->markSeen($report, $request->user());
+
         return response()->json([
-            'data' => new ReportResource($report->load(['department', 'author', 'lastEditor'])),
+            'data' => new ReportResource($report->load(['department', 'author', 'lastEditor', 'views.user'])),
         ]);
     }
 

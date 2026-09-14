@@ -7,7 +7,10 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -56,6 +59,29 @@ class Report extends Model
         return $this->belongsTo(User::class, 'last_editor_id');
     }
 
+    /**
+     * Read receipts, newest reader last, so the list reads in the order the
+     * report reached people.
+     *
+     * @return HasMany<ReportView, $this>
+     */
+    public function views(): HasMany
+    {
+        return $this->hasMany(ReportView::class)->oldest('first_seen_at');
+    }
+
+    /**
+     * The same thing as people, for when only the names are wanted.
+     *
+     * @return BelongsToMany<User, $this>
+     */
+    public function viewers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'report_views')
+            ->withPivot(['first_seen_at', 'last_seen_at', 'views'])
+            ->orderByPivot('first_seen_at');
+    }
+
     /* --------------------------------------------------------------- scopes */
 
     public function scopeForTenant(Builder $query, int $tenantId): Builder
@@ -98,6 +124,26 @@ class Report extends Model
     public function excerpt(int $length = 180): string
     {
         return Str::limit((string) $this->body_text, $length);
+    }
+
+    /** Whether this person has opened the report. */
+    public function seenBy(User $user): bool
+    {
+        return $this->views->contains(fn (ReportView $view) => $view->user_id === $user->id);
+    }
+
+    /**
+     * Readers other than whoever is looking right now.
+     *
+     * The reader's own receipt is always there — opening the dialog is what
+     * writes it — so including it would put "seen by you" on every report and
+     * tell nobody anything.
+     *
+     * @return Collection<int, ReportView>
+     */
+    public function viewsExcept(User $user): Collection
+    {
+        return $this->views->reject(fn (ReportView $view) => $view->user_id === $user->id)->values();
     }
 
     /** Whether anyone has changed it since it was first written. */

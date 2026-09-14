@@ -4,9 +4,11 @@ namespace App\Services;
 
 use App\Models\Department;
 use App\Models\Report;
+use App\Models\ReportView;
 use App\Models\Tenant;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\UniqueConstraintViolationException;
 
 /**
  * The only thing that should write a report's body.
@@ -69,5 +71,49 @@ class ReportService
         $report->save();
 
         return $report;
+    }
+
+    /**
+     * Record that someone has read a report.
+     *
+     * Called wherever the body is actually put in front of a person — the read
+     * dialog, the editor opened on an existing report, the API's show — rather
+     * than from the model, so a listing that happens to load a report does not
+     * claim it was read.
+     *
+     * A repeat opening bumps the count and the last-seen time; the first-seen
+     * time never moves, because that is the answer to "did it reach them in
+     * time?" and a reread would erase it.
+     */
+    public function markSeen(Report $report, User $user): ReportView
+    {
+        $now = now();
+
+        $view = ReportView::firstOrNew([
+            'report_id' => $report->id,
+            'user_id' => $user->id,
+        ]);
+
+        if (! $view->exists) {
+            $view->first_seen_at = $now;
+            $view->views = 0;
+        }
+
+        $view->last_seen_at = $now;
+        $view->views = (int) $view->views + 1;
+
+        try {
+            $view->save();
+        } catch (UniqueConstraintViolationException) {
+            // Two tabs opened the same report at once and the other one won
+            // the insert. Its row is the real one; fold this reading into it.
+            $view = ReportView::where('report_id', $report->id)
+                ->where('user_id', $user->id)
+                ->firstOrFail();
+
+            $view->increment('views', 1, ['last_seen_at' => $now]);
+        }
+
+        return $view;
     }
 }

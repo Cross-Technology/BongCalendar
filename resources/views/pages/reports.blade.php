@@ -125,7 +125,7 @@ class extends Component
 
         $reports = Report::forTenant($tenantId)
             ->onDate($this->day()->toDateString())
-            ->with(['author', 'lastEditor'])
+            ->with(['author', 'lastEditor', 'views.user:id,name'])
             ->get()
             ->keyBy('department_id');
 
@@ -170,11 +170,16 @@ class extends Component
 
     /* ------------------------------------------------------------ read view */
 
-    public function openReport(int $reportId): void
+    public function openReport(int $reportId, ReportService $reports): void
     {
         $report = Report::findOrFail($reportId);
 
         $this->authorize('view', $report);
+
+        // Recorded on opening rather than on closing: a reader who navigates
+        // away mid-report has still read it, and a receipt that depends on a
+        // tidy exit would miss most of them.
+        $reports->markSeen($report, $this->currentUser());
 
         $this->viewingId = $report->id;
     }
@@ -191,7 +196,8 @@ class extends Component
             return null;
         }
 
-        $report = Report::with(['author', 'lastEditor', 'department'])->find($this->viewingId);
+        $report = Report::with(['author', 'lastEditor', 'department', 'views.user:id,name'])
+            ->find($this->viewingId);
 
         if (! $report || $this->currentUser()->cannot('view', $report)) {
             $this->viewingId = null;
@@ -219,6 +225,10 @@ class extends Component
 
         if ($existing) {
             $this->authorize('update', $existing);
+
+            // Editing puts the body in front of them just as reading does, so
+            // someone who goes straight to Edit is not left off the receipts.
+            app(ReportService::class)->markSeen($existing, $this->currentUser());
         }
 
         $this->resetValidation();
@@ -460,6 +470,48 @@ class extends Component
                                 @endcan
                             </span>
                         </footer>
+
+                    {{-- Who has read it. Named rather than counted: on the
+                         roll call the useful question is which people are
+                         still to see the day's report, and a number does not
+                         answer it. The reader's own receipt is left out — it
+                         is on every report they open and says nothing. --}}
+                    @php
+                        $seen = $report->viewsExcept($this->currentUser());
+                        $shown = $seen->take(5);
+                        $extra = $seen->count() - $shown->count();
+                    @endphp
+
+                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-ink-200/70 pt-3 text-[12px] dark:border-ink-800">
+                        <span class="mr-1 flex items-center gap-1.5 font-bold uppercase tracking-wider text-ink-400">
+                            <x-icon name="eye" class="size-3.5" />
+                            @if ($seen->isEmpty())
+                                Not read yet
+                            @else
+                                Seen by {{ $seen->count() }}
+                            @endif
+                        </span>
+
+                        @forelse ($shown as $view)
+                            <span wire:key="seen-{{ $report->id }}-{{ $view->id }}"
+                                  class="inline-flex items-center gap-1.5 rounded-full border border-ink-200 py-0.5 pl-0.5 pr-2.5 dark:border-ink-700"
+                                  title="{{ $view->user->name }} — first read {{ $view->first_seen_at->format('j M Y, g:ia') }}@if ($view->views > 1) · {{ $view->views }} times, last {{ $view->last_seen_at->format('j M, g:ia') }}@endif">
+                                <span class="grid size-5 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-[9px] font-bold text-white">
+                                    {{ \Illuminate\Support\Str::of($view->user->name)->substr(0, 1)->upper() }}
+                                </span>
+                                <span class="max-w-[10rem] truncate font-semibold text-ink-600 dark:text-ink-300">{{ $view->user->name }}</span>
+                            </span>
+                        @empty
+                            <span class="text-ink-400">Nobody else has opened this report.</span>
+                        @endforelse
+
+                        @if ($extra > 0)
+                            <span class="text-ink-400"
+                                  title="{{ $seen->skip(5)->map(fn ($view) => $view->user->name)->implode(', ') }}">
+                                +{{ $extra }} more
+                            </span>
+                        @endif
+                    </div>
                     @else
                         <div class="flex flex-wrap items-center gap-3">
                             <p class="min-w-0 flex-1 text-[13px] text-ink-400">
@@ -536,6 +588,39 @@ class extends Component
                      stored, and nothing else writes this column. --}}
                 <div class="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                     <div class="rich-text text-ink-700 dark:text-ink-200">{!! $viewingReport->body !!}</div>
+                </div>
+
+                @php $seen = $viewingReport->viewsExcept($this->currentUser()); @endphp
+
+                {{-- Read receipts. The reader's own is left out — opening this
+                     dialog is what writes it, so it would be on every report
+                     and would say nothing. --}}
+                <div class="shrink-0 border-t border-ink-200/80 px-6 py-3 dark:border-ink-800">
+                    @if ($seen->isEmpty())
+                        <p class="flex items-center gap-1.5 text-[12px] text-ink-400">
+                            <x-icon name="eye" class="size-3.5" />
+                            You are the first to read this.
+                        </p>
+                    @else
+                        <div class="flex flex-wrap items-center gap-x-2 gap-y-2">
+                            <span class="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-ink-400">
+                                <x-icon name="eye" class="size-3.5" />
+                                Seen by {{ $seen->count() }}
+                            </span>
+
+                            @foreach ($seen as $view)
+                                <span wire:key="seen-{{ $view->id }}"
+                                      class="inline-flex items-center gap-1.5 rounded-full border border-ink-200 py-0.5 pl-0.5 pr-2.5 text-[12px] dark:border-ink-700"
+                                      title="First read {{ $view->first_seen_at->format('j M Y, g:ia') }}@if ($view->views > 1) · {{ $view->views }} times, last {{ $view->last_seen_at->format('j M, g:ia') }}@endif">
+                                    <span class="grid size-5 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-[9px] font-bold text-white">
+                                        {{ \Illuminate\Support\Str::of($view->user->name)->substr(0, 1)->upper() }}
+                                    </span>
+                                    <span class="font-semibold text-ink-600 dark:text-ink-300">{{ $view->user->name }}</span>
+                                    <span class="text-ink-400">{{ $view->first_seen_at->diffForHumans(short: true) }}</span>
+                                </span>
+                            @endforeach
+                        </div>
+                    @endif
                 </div>
 
                 <footer class="flex shrink-0 items-center gap-2 border-t border-ink-200/80 px-6 py-4 dark:border-ink-800">

@@ -356,4 +356,158 @@ class ReportPageTest extends TestCase
 
         $this->assertSame(0, Report::count());
     }
+
+    /* ------------------------------------------------------- read receipts */
+
+    public function test_opening_a_report_records_who_read_it(): void
+    {
+        $report = Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now()->toDateString(),
+        ]);
+
+        $reader = $this->member();
+
+        Livewire::actingAs($reader)
+            ->test('pages::reports')
+            ->call('openReport', $report->id);
+
+        $this->assertDatabaseHas('report_views', [
+            'report_id' => $report->id,
+            'user_id' => $reader->id,
+            'views' => 1,
+        ]);
+    }
+
+    public function test_reopening_a_report_bumps_the_count_but_keeps_the_first_read(): void
+    {
+        $report = Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now()->toDateString(),
+        ]);
+
+        $reader = $this->member();
+
+        Livewire::actingAs($reader)
+            ->test('pages::reports')
+            ->call('openReport', $report->id)
+            ->call('closeReport')
+            ->call('openReport', $report->id);
+
+        $view = $report->views()->where('user_id', $reader->id)->sole();
+
+        $this->assertSame(2, $view->views);
+        $this->assertSame(1, $report->views()->count());
+        $this->assertTrue($view->first_seen_at->lessThanOrEqualTo($view->last_seen_at));
+    }
+
+    public function test_editing_an_existing_report_counts_as_reading_it(): void
+    {
+        $report = Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now()->toDateString(),
+        ]);
+
+        $editor = $this->member();
+
+        Livewire::actingAs($editor)
+            ->test('pages::reports')
+            ->call('startWriting', $this->department->id);
+
+        $this->assertTrue($report->fresh()->seenBy($editor));
+    }
+
+    public function test_writing_a_brand_new_report_records_no_receipt(): void
+    {
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('startWriting', $this->department->id);
+
+        $this->assertDatabaseCount('report_views', 0);
+    }
+
+    public function test_the_read_dialog_names_other_readers_but_not_the_viewer(): void
+    {
+        $report = Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now()->toDateString(),
+        ]);
+
+        $other = $this->member();
+        $other->forceFill(['name' => 'Sophea Chan'])->save();
+
+        Livewire::actingAs($other)->test('pages::reports')->call('openReport', $report->id);
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('openReport', $report->id)
+            ->assertSee('Seen by 1')
+            ->assertSee('Sophea Chan');
+    }
+
+    public function test_a_report_nobody_else_has_read_says_so(): void
+    {
+        $report = Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now()->toDateString(),
+        ]);
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->call('openReport', $report->id)
+            ->assertSee('You are the first to read this.');
+    }
+
+    public function test_the_list_names_the_people_who_read_each_report(): void
+    {
+        $report = Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now()->toDateString(),
+        ]);
+
+        $reader = $this->member();
+        $reader->forceFill(['name' => 'Sophea Chan'])->save();
+
+        Livewire::actingAs($reader)->test('pages::reports')->call('openReport', $report->id);
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->assertSee('Seen by 1')
+            ->assertSee('Sophea Chan');
+    }
+
+    public function test_the_list_says_when_a_report_has_not_been_read(): void
+    {
+        Report::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'department_id' => $this->department->id,
+            'author_id' => $this->owner->id,
+            'report_date' => now()->toDateString(),
+        ]);
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->assertSee('Not read yet');
+    }
+
+    public function test_a_department_with_no_report_renders_without_receipts(): void
+    {
+        Livewire::actingAs($this->owner)
+            ->test('pages::reports')
+            ->assertOk()
+            ->assertSee('Nothing written for this day yet.')
+            ->assertDontSee('Not read yet');
+    }
 }
