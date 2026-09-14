@@ -70,8 +70,8 @@ class TaskDetailPanelTest extends TestCase
             ->set('detail_description', 'Ring twice')
             ->set('detail_note', 'Left the key under the mat')
             ->set('detail_due', '2026-09-01T09:00')
-            ->set('detail_department_id', $department->id)
-            ->set('detail_assignee_id', $user->id)
+            ->set('detail_department_ids', [$department->id])
+            ->set('detail_assignee_ids', [$user->id])
             ->assertHasNoErrors();
 
         $fresh = $task->fresh();

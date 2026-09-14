@@ -215,6 +215,144 @@ document.addEventListener('alpine:init', () => {
             },
         };
     });
+
+    /*
+     * The picker behind <x-multi-select>: a one-line trigger that expands a
+     * searchable list of checkboxes.
+     *
+     * It expands in the flow of the page rather than floating over it. Both
+     * places it is used — the task dialog and the detail drawer — are
+     * `overflow-y-auto` columns, and an absolutely positioned menu is clipped
+     * at their edge: pick the last department in a long list and the options
+     * would be cut off by the bottom of the dialog.
+     *
+     * The selection itself lives in the Livewire property, read through $wire
+     * so the trigger always says what the server holds. Ticking a box writes
+     * back without a round trip; `commitOnClose` sends one request when the
+     * list is folded away, so picking five people costs one request rather
+     * than five.
+     */
+    window.Alpine.data('multiSelect', (model, commitOnClose = false) => ({
+        open: false,
+        search: '',
+        dirty: false,
+        pending: null,
+
+        get selected() {
+            return this.$wire.get(model) ?? [];
+        },
+
+        get count() {
+            return this.selected.length;
+        },
+
+        has(id) {
+            return this.selected.some((value) => Number(value) === Number(id));
+        },
+
+        toggleId(id) {
+            const next = this.has(id)
+                ? this.selected.filter((value) => Number(value) !== Number(id))
+                : [...this.selected, id];
+
+            // `false`: hold it on the client. The list stays put while the
+            // user ticks along, and one request carries the lot on close.
+            this.$wire.$set(model, next, false);
+            this.touched();
+        },
+
+        clear() {
+            this.$wire.$set(model, [], false);
+            this.touched();
+        },
+
+        /*
+         * A held change is sent when the list is folded away. The timer is the
+         * backstop: a panel that saves as you go must not lose a pick just
+         * because the list was left open, and a second's pause after the last
+         * tick still costs one request rather than one per name.
+         */
+        touched() {
+            this.dirty = true;
+
+            if (! commitOnClose) {
+                return;
+            }
+
+            clearTimeout(this.pending);
+            this.pending = setTimeout(() => this.commit(), 1200);
+        },
+
+        commit() {
+            clearTimeout(this.pending);
+
+            if (! this.dirty) {
+                return;
+            }
+
+            this.dirty = false;
+
+            // Queued as a real update this time, so the component's own
+            // updated() hook runs and the change is saved.
+            this.$wire.$set(model, this.selected, true);
+        },
+
+        /** Matches on the label, so typing "sal" finds Sales. */
+        matches(label) {
+            return this.search.trim() === ''
+                || label.toLowerCase().includes(this.search.trim().toLowerCase());
+        },
+
+        anyMatch(labels) {
+            return labels.some((label) => this.matches(label));
+        },
+
+        /** What the trigger reads when the list is folded away. */
+        get summary() {
+            const names = this.selected.map((id) => this.labelFor(id)).filter(Boolean);
+
+            if (names.length === 0) {
+                return '';
+            }
+
+            // Two names fit; past that the count says more than a truncated list.
+            return names.length <= 2 ? names.join(', ') : `${names.length} selected`;
+        },
+
+        /*
+         * Read off the rendered list rather than a map captured at mount, so a
+         * rename or a newly added department shows straight after a re-render.
+         */
+        labelFor(id) {
+            return this.$refs.list?.querySelector(`[data-id="${id}"]`)?.dataset.label ?? '';
+        },
+
+        toggle() {
+            this.open ? this.close() : this.expand();
+        },
+
+        expand() {
+            this.open = true;
+            this.$nextTick(() => this.$refs.search?.focus());
+        },
+
+        close() {
+            if (! this.open) {
+                return;
+            }
+
+            this.open = false;
+            this.search = '';
+
+            if (commitOnClose) {
+                this.commit();
+            }
+        },
+
+        destroy() {
+            clearTimeout(this.pending);
+        },
+    }));
 });
 
 /*

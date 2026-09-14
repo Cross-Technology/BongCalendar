@@ -123,23 +123,28 @@
             </label>
         </div>
 
-        {{-- Department · Assignee: the API carries both, so the panel edits both --}}
+        {{-- Departments · Assignees: as many of each as apply. Shared work is
+             one task on both boards, not a copy for each team. --}}
         <div class="grid gap-2">
-            <label class="{{ $tileLabel }}" for="detail-department">Department</label>
-            <select id="detail-department" wire:model.live="detail_department_id" class="{{ $field }}">
-                <option value="">No department</option>
-                @foreach ($departments as $department)
-                    <option value="{{ $department->id }}">{{ $department->name }}</option>
-                @endforeach
-            </select>
+            <span class="{{ $tileLabel }}">Departments</span>
+            <x-multi-select
+                model="detail_department_ids"
+                :selected="$task->departments->pluck('id')"
+                commit-on-close
+                :options="$departments->map(fn ($department) => ['id' => $department->id, 'label' => $department->name, 'color' => $department->color])"
+                placeholder="No department"
+                search-placeholder="Search departments…"
+                empty="No departments yet" />
 
-            <label class="{{ $tileLabel }} mt-1" for="detail-assignee">Assignee</label>
-            <select id="detail-assignee" wire:model.live="detail_assignee_id" class="{{ $field }}">
-                <option value="">Unassigned</option>
-                @foreach ($members as $member)
-                    <option value="{{ $member->id }}">{{ $member->name }}</option>
-                @endforeach
-            </select>
+            <span class="{{ $tileLabel }} mt-1">Assignees</span>
+            <x-multi-select
+                model="detail_assignee_ids"
+                :selected="$task->assignees->pluck('id')"
+                commit-on-close
+                :options="$members->map(fn ($member) => ['id' => $member->id, 'label' => $member->name])"
+                placeholder="Unassigned"
+                search-placeholder="Search people…"
+                empty="No members yet" />
         </div>
 
         <div>

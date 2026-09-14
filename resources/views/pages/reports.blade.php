@@ -156,16 +156,24 @@ class extends Component
 
         return $this->taskCache = Task::forTenant($tenant->id)
             ->roots()
-            ->whereNotNull('department_id')
+            ->has('departments')
             ->onCalendarDay($this->day(), $tenant->timezone ?: 'UTC')
-            ->with('assignee:id,name')
+            ->with(['assignees:id,name', 'departments:id'])
             ->withCount([
                 'checklist',
                 'checklist as checklist_done_count' => fn ($q) => $q->where('completed', true),
             ])
             ->boardOrder()
             ->get()
-            ->groupBy('department_id');
+            /*
+             * A task two departments share belongs in both their reports. It
+             * is the same task — each of them writes up its own side of it.
+             */
+            ->flatMap(fn (Task $task) => $task->departments->map(
+                fn ($department) => ['department_id' => $department->id, 'task' => $task]
+            ))
+            ->groupBy('department_id')
+            ->map(fn (Collection $rows) => $rows->pluck('task')->values());
     }
 
     /* ------------------------------------------------------------ read view */
@@ -284,7 +292,7 @@ class extends Component
         // checklist_count as null and quietly drops the progress that "Add all"
         // includes — the same task, written two different ways.
         $task = Task::forTenant($this->requireTenant()->id)
-            ->with('assignee:id,name')
+            ->with('assignees:id,name')
             ->withCount([
                 'checklist',
                 'checklist as checklist_done_count' => fn ($q) => $q->where('completed', true),
@@ -317,8 +325,8 @@ class extends Component
             $bits[] = "{$task->checklist_done_count}/{$task->checklist_count} checklist";
         }
 
-        if ($task->assignee) {
-            $bits[] = $task->assignee->name;
+        if ($task->assignees->isNotEmpty()) {
+            $bits[] = $task->assignees->pluck('name')->join(', ');
         }
 
         $line = '<strong>'.e($task->title).'</strong> — '.e(implode(' · ', $bits));
@@ -696,8 +704,8 @@ class extends Component
                                                 <span class="text-ink-400">· {{ $task->checklist_done_count }}/{{ $task->checklist_count }}</span>
                                             @endif
 
-                                            @if ($task->assignee)
-                                                <span class="truncate text-ink-400">· {{ $task->assignee->name }}</span>
+                                            @if ($task->assignees->isNotEmpty())
+                                                <span class="truncate text-ink-400">· {{ $task->assignees->pluck('name')->join(', ') }}</span>
                                             @endif
                                         </div>
                                     </li>

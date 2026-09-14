@@ -44,6 +44,22 @@ class TaskRequest extends FormRequest
                 'nullable', 'integer',
                 Rule::exists('tenant_user', 'user_id')->where('tenant_id', $tenantId),
             ],
+
+            /*
+             * A task can be shared between departments and picked up by more
+             * than one person. The singular keys above stay for clients that
+             * only ever send one, and read as a set of one.
+             */
+            'department_ids' => ['nullable', 'array', 'max:20'],
+            'department_ids.*' => [
+                'integer',
+                Rule::exists('departments', 'id')->where('tenant_id', $tenantId)->whereNull('deleted_at'),
+            ],
+            'assignee_ids' => ['nullable', 'array', 'max:20'],
+            'assignee_ids.*' => [
+                'integer',
+                Rule::exists('tenant_user', 'user_id')->where('tenant_id', $tenantId),
+            ],
             // Repeating: one real task per occurrence, created together.
             'repeat' => ['nullable', 'array'],
             'repeat.frequency' => ['required_with:repeat', Rule::in(TaskRecurrenceService::FREQUENCIES)],
@@ -75,6 +91,8 @@ class TaskRequest extends FormRequest
     {
         return [
             'assignee_id.exists' => 'That person is not a member of this workspace.',
+            'assignee_ids.*.exists' => 'One of those people is not a member of this workspace.',
+            'department_ids.*.exists' => 'One of those departments is not in this workspace.',
             'parent_task_id.exists' => 'A subtask can only hang off a top-level task in this workspace.',
         ];
     }

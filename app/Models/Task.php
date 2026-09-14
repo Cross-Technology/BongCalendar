@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
@@ -45,6 +46,20 @@ class Task extends Model
             }
 
             $task->department_id = User::find($task->assignee_id)?->primaryDepartmentId($task->tenant_id);
+        });
+
+        /*
+         * The pivots are what every read counts, so a plain write of the
+         * primary column — the API, a template, a subtask inheriting its
+         * parent — has to land there too. A sync sets both sides itself and
+         * says so, which is why these stand aside for it.
+         */
+        static::created(function (Task $task) {
+            $task->mirrorPrimaryOwners(force: true);
+        });
+
+        static::updated(function (Task $task) {
+            $task->mirrorPrimaryOwners(force: false);
         });
     }
 
@@ -118,10 +133,26 @@ class Task extends Model
         return $this->belongsTo(Tenant::class);
     }
 
-    /** @return BelongsTo<Department, $this> */
+    /**
+     * The department the task is filed under first. Kept in step with
+     * {@see self::departments()}, which is the full set.
+     *
+     * @return BelongsTo<Department, $this>
+     */
     public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);
+    }
+
+    /**
+     * Every department the task is filed under. Work that two teams share is
+     * one task on both their boards, not a copy each.
+     *
+     * @return BelongsToMany<Department, $this>
+     */
+    public function departments(): BelongsToMany
+    {
+        return $this->belongsToMany(Department::class, 'department_task')->withTimestamps();
     }
 
     /** @return BelongsTo<User, $this> */
@@ -130,10 +161,26 @@ class Task extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
-    /** @return BelongsTo<User, $this> */
+    /**
+     * The first person on the task — who it is listed against where there is
+     * only room for one name.
+     *
+     * @return BelongsTo<User, $this>
+     */
     public function assignee(): BelongsTo
     {
         return $this->belongsTo(User::class, 'assignee_id');
+    }
+
+    /**
+     * Everyone the task is on. All of them own it equally; `assignee` is just
+     * the first of them.
+     *
+     * @return BelongsToMany<User, $this>
+     */
+    public function assignees(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'task_user')->withTimestamps();
     }
 
     /** @return BelongsTo<Task, $this> */
@@ -182,17 +229,35 @@ class Task extends Model
         return $this->start_date ?? $this->due_date;
     }
 
-    /** Tasks scheduled for a given local calendar day, by whichever date applies. */
-    public function scopeOnCalendarDay(Builder $query, \DateTimeInterface $day, string $timezone): Builder
+    /**
+     * Tasks landing between two local calendar days, by whichever date
+     * applies — the day the work is scheduled for, or the deadline when it was
+     * never scheduled. Both ends are inclusive whole days.
+     */
+    public function scopeInCalendarWindow(Builder $query, \DateTimeInterface $from, \DateTimeInterface $to, string $timezone): Builder
     {
-        $start = CarbonImmutable::instance($day)->setTimezone($timezone)->startOfDay();
-        $window = [$start->utc(), $start->endOfDay()->utc()];
+        $window = [
+            CarbonImmutable::instance($from)->setTimezone($timezone)->startOfDay()->utc(),
+            CarbonImmutable::instance($to)->setTimezone($timezone)->endOfDay()->utc(),
+        ];
 
         return $query->where(fn (Builder $q) => $q
             ->whereBetween('start_date', $window)
             ->orWhere(fn (Builder $inner) => $inner
                 ->whereNull('start_date')
                 ->whereBetween('due_date', $window)));
+    }
+
+    /** Tasks scheduled for a given local calendar day, by whichever date applies. */
+    public function scopeOnCalendarDay(Builder $query, \DateTimeInterface $day, string $timezone): Builder
+    {
+        return $query->inCalendarWindow($day, $day, $timezone);
+    }
+
+    /** Tasks with no day of their own — neither scheduled nor due. */
+    public function scopeUnscheduled(Builder $query): Builder
+    {
+        return $query->whereNull('start_date')->whereNull('due_date');
     }
 
     /** Tasks due on a given local calendar day. */
@@ -210,6 +275,121 @@ class Task extends Model
             // Portable priority ordering — FIELD() would tie this to MySQL.
             ->orderByRaw("CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END")
             ->orderBy('created_at');
+    }
+
+    /** Tasks filed under any of these departments. */
+    public function scopeInDepartments(Builder $query, array $departmentIds): Builder
+    {
+        return $query->whereHas('departments', fn (Builder $q) => $q->whereIn('departments.id', $departmentIds));
+    }
+
+    /** Tasks any of these people are on. */
+    public function scopeAssignedTo(Builder $query, array $userIds): Builder
+    {
+        return $query->whereHas('assignees', fn (Builder $q) => $q->whereIn('users.id', $userIds));
+    }
+
+    /** Tasks nobody has picked up. */
+    public function scopeUnassigned(Builder $query): Builder
+    {
+        return $query->whereDoesntHave('assignees');
+    }
+
+    /* --------------------------------------------------------------- owners */
+
+    /**
+     * Set while a sync is writing both sides, so the mirror hooks stand aside
+     * and do not flatten the set back to its first member.
+     */
+    protected bool $syncingOwners = false;
+
+    /**
+     * Files the task under a set of departments. The first is the primary —
+     * the one `department_id` carries — so a single-name read still answers
+     * with the same department it always did.
+     *
+     * @param  array<int, int|string|null>  $ids
+     */
+    public function syncDepartments(array $ids): void
+    {
+        $ids = self::normaliseIds($ids);
+
+        $this->syncingOwners = true;
+
+        try {
+            $this->departments()->sync($ids);
+            $this->forceFill(['department_id' => $ids[0] ?? null])->save();
+
+            // Handing an unfiled task to someone files it under their own
+            // department (see the saving hook). The set has to agree.
+            if ($this->department_id !== null && ! in_array($this->department_id, $ids, true)) {
+                $this->departments()->syncWithoutDetaching([$this->department_id]);
+            }
+        } finally {
+            $this->syncingOwners = false;
+        }
+
+        $this->unsetRelation('departments')->unsetRelation('department');
+    }
+
+    /**
+     * Puts a set of people on the task. The first is the primary, for the same
+     * reason departments have one.
+     *
+     * @param  array<int, int|string|null>  $ids
+     */
+    public function syncAssignees(array $ids): void
+    {
+        $ids = self::normaliseIds($ids);
+
+        $this->syncingOwners = true;
+
+        try {
+            $this->assignees()->sync($ids);
+            $this->forceFill(['assignee_id' => $ids[0] ?? null])->save();
+
+            if ($this->department_id !== null && ! $this->departments()->whereKey($this->department_id)->exists()) {
+                $this->departments()->syncWithoutDetaching([$this->department_id]);
+            }
+        } finally {
+            $this->syncingOwners = false;
+        }
+
+        $this->unsetRelation('assignees')->unsetRelation('assignee');
+    }
+
+    /**
+     * Whole positive ids, in the order given, without repeats. Blank picks —
+     * the "None" option of a multi-select posts an empty string — drop out.
+     *
+     * @param  array<int, int|string|null>  $ids
+     * @return array<int, int>
+     */
+    protected static function normaliseIds(array $ids): array
+    {
+        return array_values(array_unique(array_filter(array_map('intval', $ids))));
+    }
+
+    /**
+     * Copies a straight write of `department_id` / `assignee_id` into the
+     * pivots, so callers that know nothing about sets still file the task
+     * somewhere the board can find it.
+     *
+     * @param  bool  $force  True on create, when neither column counts as changed.
+     */
+    protected function mirrorPrimaryOwners(bool $force): void
+    {
+        if ($this->syncingOwners) {
+            return;
+        }
+
+        if ($force || $this->wasChanged('department_id')) {
+            $this->departments()->sync(array_filter([$this->department_id]));
+        }
+
+        if ($force || $this->wasChanged('assignee_id')) {
+            $this->assignees()->sync(array_filter([$this->assignee_id]));
+        }
     }
 
     /* -------------------------------------------------------------- helpers */

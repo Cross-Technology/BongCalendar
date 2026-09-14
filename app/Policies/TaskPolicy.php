@@ -31,6 +31,8 @@ class TaskPolicy
     {
         return $task->created_by === $user->id
             || $task->assignee_id === $user->id
+            // Anyone else on the task owns it just as much as the first name.
+            || $task->assignees()->whereKey($user->id)->exists()
             || $user->isTenantAdmin($task->tenant_id);
     }
 }

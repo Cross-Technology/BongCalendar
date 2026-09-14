@@ -34,7 +34,7 @@ class DailyDigestService
         return Task::query()
             ->whereIn('tenant_id', $tenantIds)
             ->roots()
-            ->where(fn (Builder $q) => $q->where('assignee_id', $user->id)->orWhereNull('assignee_id'));
+            ->where(fn (Builder $q) => $q->assignedTo([$user->id])->orWhere(fn (Builder $inner) => $inner->unassigned()));
     }
 
     /**
@@ -129,7 +129,7 @@ class DailyDigestService
             ->whereBetween('updated_at', $window)
             ->whereHas('task', fn (Builder $q) => $q
                 ->whereIn('tenant_id', $user->tenants()->pluck('tenants.id'))
-                ->where(fn (Builder $inner) => $inner->where('assignee_id', $user->id)->orWhereNull('assignee_id')))
+                ->where(fn (Builder $inner) => $inner->assignedTo([$user->id])->orWhere(fn (Builder $q) => $q->unassigned())))
             ->count();
 
         $stillDue = $this->theirTasks($user)

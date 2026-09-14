@@ -58,9 +58,11 @@ class extends Component
 
     public string $detail_due = '';
 
-    public ?int $detail_department_id = null;
+    /** @var array<int, int|string> Every department the open task is filed under. */
+    public array $detail_department_ids = [];
 
-    public ?int $detail_assignee_id = null;
+    /** @var array<int, int|string> Everyone the open task is on. */
+    public array $detail_assignee_ids = [];
 
     public string $newSubtaskTitle = '';
 
@@ -206,8 +208,8 @@ class extends Component
         $this->detail_note = (string) $task->note;
         $this->detail_start = $task->start_date?->setTimezone($this->userTimezone())->format('Y-m-d\TH:i') ?? '';
         $this->detail_due = $task->due_date?->setTimezone($this->userTimezone())->format('Y-m-d\TH:i') ?? '';
-        $this->detail_department_id = $task->department_id;
-        $this->detail_assignee_id = $task->assignee_id;
+        $this->detail_department_ids = $task->departments->pluck('id')->all();
+        $this->detail_assignee_ids = $task->assignees->pluck('id')->all();
         $this->newSubtaskTitle = '';
     }
 
@@ -219,7 +221,7 @@ class extends Component
         }
 
         return Task::forTenant($this->requireTenant()->id)
-            ->with(['department:id,name,color,position', 'assignee:id,name'])
+            ->with(['departments:id,name,color,position', 'assignees:id,name'])
             ->find($this->taskId);
     }
 
@@ -281,22 +283,52 @@ class extends Component
         ]);
     }
 
-    public function updatedDetailDepartmentId(mixed $value): void
+    public function updatedDetailDepartmentIds(mixed $value): void
     {
-        $this->updateActiveTask([
-            'department_id' => $value
-                ? Department::where('tenant_id', $this->requireTenant()->id)->findOrFail($value)->id
-                : null,
-        ]);
-    }
+        $ids = array_values(array_filter(array_map('intval', (array) $value)));
+        $tenantId = $this->requireTenant()->id;
 
-    public function updatedDetailAssigneeId(mixed $value): void
-    {
-        if ($value && ! $this->requireTenant()->users()->whereKey($value)->exists()) {
-            abort(403, 'That person is not a member of this workspace.');
+        // Every id has to be one of ours — the checkbox values reach us from
+        // the browser, so they are a request, not a fact.
+        $known = Department::where('tenant_id', $tenantId)->whereIn('id', $ids)->pluck('id')->all();
+
+        abort_if(count($known) !== count($ids), 403, 'That department is not in this workspace.');
+
+        $task = $this->activeTask();
+
+        if (! $task) {
+            $this->taskId = null;
+
+            return;
         }
 
-        $this->updateActiveTask(['assignee_id' => $value ?: null]);
+        $this->authorize('update', $task);
+        $task->syncDepartments($ids);
+
+        // The task may have followed its assignee into a department; show it.
+        $this->detail_department_ids = $task->departments()->pluck('departments.id')->all();
+    }
+
+    public function updatedDetailAssigneeIds(mixed $value): void
+    {
+        $ids = array_values(array_filter(array_map('intval', (array) $value)));
+
+        $members = $this->requireTenant()->users()->whereIn('users.id', $ids)->count();
+
+        abort_if($members !== count($ids), 403, 'That person is not a member of this workspace.');
+
+        $task = $this->activeTask();
+
+        if (! $task) {
+            $this->taskId = null;
+
+            return;
+        }
+
+        $this->authorize('update', $task);
+        $task->syncAssignees($ids);
+
+        $this->detail_department_ids = $task->departments()->pluck('departments.id')->all();
     }
 
     public function setTaskPriority(int $taskId, string $priority): void
@@ -345,12 +377,11 @@ class extends Component
         Task::create([
             'tenant_id' => $parent->tenant_id,
             'created_by' => $this->currentUser()->id,
-            'department_id' => $parent->department_id,
             'parent_task_id' => $parent->id,
             'title' => $data['newSubtaskTitle'],
             'status' => 'todo',
             'priority' => $parent->priority,
-        ]);
+        ])->syncDepartments($parent->departments()->pluck('departments.id')->all());
 
         $this->newSubtaskTitle = '';
     }
@@ -474,7 +505,7 @@ class extends Component
     {
         return Task::forTenant($this->requireTenant()->id)
             ->roots()
-            ->when($this->department, fn ($q) => $q->where('department_id', $this->department));
+            ->when($this->department, fn ($q) => $q->inDepartments([$this->department]));
     }
 
     public function clearDepartment(): void
@@ -694,7 +725,7 @@ class extends Component
             ->where(fn ($q) => $q
                 ->whereBetween('start_date', $window)
                 ->orWhere(fn ($inner) => $inner->whereNull('start_date')->whereBetween('due_date', $window)))
-            ->with(['department:id,name,color,position', 'assignee:id,name'])
+            ->with(['departments:id,name,color,position', 'assignees:id,name'])
             ->boardOrder()
             ->get() as $task) {
             // The scheduled day wins; the deadline is the fallback, so a task
@@ -737,10 +768,18 @@ class extends Component
         $selectedTasks = collect($tasksByDay[$selected->format('Y-m-d')] ?? []);
 
         $taskGroups = $selectedTasks
-            ->groupBy(fn (Task $task) => $task->department_id ?? 0)
-            ->map(fn ($tasks) => [
-                'department' => $tasks->first()->department,
-                'tasks' => $tasks->values(),
+            /*
+             * Work two teams share is one task filed under both, so it is
+             * listed under both — a shared job that showed up under only one
+             * of them would read to the other team as not theirs.
+             */
+            ->flatMap(fn (Task $task) => $task->departments->isEmpty()
+                ? [['department' => null, 'task' => $task]]
+                : $task->departments->map(fn ($department) => ['department' => $department, 'task' => $task]))
+            ->groupBy(fn (array $row) => $row['department']?->id ?? 0)
+            ->map(fn ($rows) => [
+                'department' => $rows->first()['department'],
+                'tasks' => $rows->pluck('task')->values(),
             ])
             ->sortBy(fn (array $group) => $group['department']
                 ? sprintf('%05d %s', $group['department']->position, $group['department']->name)
@@ -924,7 +963,7 @@ class extends Component
 
                         <ul class="space-y-1">
                             @foreach ($group['tasks'] as $index => $task)
-                        <li wire:key="day-task-{{ $task->id }}"
+                        <li wire:key="day-task-{{ $groupDepartment?->id ?? 'none' }}-{{ $task->id }}"
                             class="rise group flex items-center gap-3 rounded-xl px-2 py-2 transition
                                    {{ $activeTask && $activeTask->id === $task->id
                                        ? 'bg-brand-50 dark:bg-brand-950/60'
@@ -949,15 +988,19 @@ class extends Component
                                 <span class="block truncate text-[15px] font-semibold {{ $task->isDone() ? 'text-ink-400 line-through' : '' }}">
                                     {{ $task->title }}
                                 </span>
-                                @if ($task->department || $task->assignee)
-                                    <span class="mt-0.5 flex items-center gap-2 text-[13px] text-ink-400">
-                                        @if ($task->department)
+                                @if ($task->departments->isNotEmpty() || $task->assignees->isNotEmpty())
+                                    <span class="mt-0.5 flex flex-wrap items-center gap-2 text-[13px] text-ink-400">
+                                        {{-- The group heading already names this
+                                             department; the others are the news. --}}
+                                        @foreach ($task->departments->where('id', '!=', $groupDepartment?->id) as $dept)
                                             <span class="inline-flex items-center gap-1">
-                                                <span class="size-1.5 rounded-full" style="background-color: {{ $task->department->color }}"></span>
-                                                {{ $task->department->name }}
+                                                <span class="size-1.5 rounded-full" style="background-color: {{ $dept->color }}"></span>
+                                                {{ $dept->name }}
                                             </span>
+                                        @endforeach
+                                        @if ($task->assignees->isNotEmpty())
+                                            <span class="truncate">{{ $task->assignees->pluck('name')->join(', ') }}</span>
                                         @endif
-                                        @if ($task->assignee) <span class="truncate">{{ $task->assignee->name }}</span> @endif
                                     </span>
                                 @endif
                             </button>

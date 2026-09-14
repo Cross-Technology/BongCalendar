@@ -37,8 +37,14 @@ class TaskController extends Controller
             ->when($request->boolean('roots_only', true), fn ($q) => $q->roots())
             ->when($request->filled('status'), fn ($q) => $q->whereIn('status', (array) $request->input('status')))
             ->when($request->filled('priority'), fn ($q) => $q->whereIn('priority', (array) $request->input('priority')))
-            ->when($request->filled('department'), fn ($q) => $q->where('department_id', $request->integer('department')))
-            ->when($request->filled('assignee'), fn ($q) => $q->where('assignee_id', $request->integer('assignee')))
+            // Both take one id or a list: a task can sit in several departments
+            // and be on several people, so a filter matches if any of them do.
+            ->when($request->filled('department'), fn ($q) => $q->inDepartments(
+                array_map('intval', (array) $request->input('department'))
+            ))
+            ->when($request->filled('assignee'), fn ($q) => $q->assignedTo(
+                array_map('intval', (array) $request->input('assignee'))
+            ))
             ->when($request->filled('tag'), fn ($q) => $q->whereJsonContains('tags', $request->string('tag')->value()))
             ->when($request->boolean('open_only'), fn ($q) => $q->open())
             ->when($request->filled('due'), function ($q) use ($request, $now) {
@@ -50,7 +56,10 @@ class TaskController extends Controller
                     default => $q,
                 };
             })
-            ->with(['assignee:id,name,email', 'department:id,tenant_id,name,color,slug'])
+            ->with([
+                'assignee:id,name,email', 'department:id,tenant_id,name,color,slug',
+                'assignees:id,name,email', 'departments:id,tenant_id,name,color,slug',
+            ])
             // Opt-in so the common listing stays a single cheap query, while a
             // client that needs checklists avoids one request per task.
             ->when($request->boolean('with_checklist'), fn ($q) => $q->with('checklist'))
@@ -69,7 +78,8 @@ class TaskController extends Controller
 
         $data = $request->validated();
         $repeat = $data['repeat'] ?? null;
-        unset($data['repeat']);
+        $owners = $this->ownerSets($data);
+        unset($data['repeat'], $data['department_ids'], $data['assignee_ids']);
 
         $attributes = $data + [
             'tenant_id' => $tenant->id,
@@ -80,7 +90,7 @@ class TaskController extends Controller
 
         if (! $repeat) {
             return response()->json([
-                'data' => new TaskResource($this->createOne($attributes)),
+                'data' => new TaskResource($this->createOne($attributes, owners: $owners)),
             ], 201);
         }
 
@@ -116,6 +126,7 @@ class TaskController extends Controller
             fn (CarbonImmutable $date) => $this->createOne(
                 $attributes + ['series_id' => $seriesId],
                 $this->occurrenceDates($date, $anchorField, $gap),
+                $owners,
             )
         ));
 
@@ -128,8 +139,9 @@ class TaskController extends Controller
     /**
      * @param  array<string, mixed>  $attributes
      * @param  array<string, mixed>  $dates  Date columns to override for this occurrence.
+     * @param  array{departments: ?array<int, int>, assignees: ?array<int, int>}  $owners
      */
-    protected function createOne(array $attributes, array $dates = []): Task
+    protected function createOne(array $attributes, array $dates = [], array $owners = []): Task
     {
         $attributes = array_merge($attributes, $dates);
 
@@ -140,7 +152,56 @@ class TaskController extends Controller
             $task->forceFill(['completed_at' => now()])->save();
         }
 
+        $this->applyOwners($task, $owners);
+
         return $task;
+    }
+
+    /**
+     * The department and assignee sets a request asked for, or null for each
+     * one it said nothing about — which must not be read as "clear it".
+     *
+     * A lone `department_id` / `assignee_id` counts as a set of one, so a
+     * client that only ever sends one keeps working unchanged.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{departments: ?array<int, int>, assignees: ?array<int, int>}
+     */
+    protected function ownerSets(array $data): array
+    {
+        $set = function (?string $listKey, ?string $singleKey) use ($data): ?array {
+            if (array_key_exists($listKey, $data)) {
+                return array_map('intval', (array) ($data[$listKey] ?? []));
+            }
+
+            if (array_key_exists($singleKey, $data)) {
+                return array_filter([$data[$singleKey]]);
+            }
+
+            return null;
+        };
+
+        return [
+            'departments' => $set('department_ids', 'department_id'),
+            'assignees' => $set('assignee_ids', 'assignee_id'),
+        ];
+    }
+
+    /**
+     * People first: handing an unfiled task to someone files it under their
+     * department, and an explicit set of departments should then win.
+     *
+     * @param  array{departments?: ?array<int, int>, assignees?: ?array<int, int>}  $owners
+     */
+    protected function applyOwners(Task $task, array $owners): void
+    {
+        if (($owners['assignees'] ?? null) !== null) {
+            $task->syncAssignees($owners['assignees']);
+        }
+
+        if (($owners['departments'] ?? null) !== null) {
+            $task->syncDepartments($owners['departments']);
+        }
     }
 
     /**
@@ -222,7 +283,11 @@ class TaskController extends Controller
 
         return response()->json([
             'data' => new TaskResource(
-                $task->load(['assignee:id,name,email', 'creator:id,name,email', 'department', 'subtasks', 'checklist'])
+                $task->load([
+                    'assignee:id,name,email', 'creator:id,name,email', 'department',
+                    'assignees:id,name,email', 'departments',
+                    'subtasks', 'checklist',
+                ])
             ),
         ]);
     }
@@ -236,7 +301,8 @@ class TaskController extends Controller
         // Status carries a side effect, so route it through the model rather
         // than letting a bare update leave completed_at stale.
         $status = $data['status'] ?? null;
-        unset($data['status']);
+        $owners = $this->ownerSets($data);
+        unset($data['status'], $data['department_ids'], $data['assignee_ids'], $data['department_id'], $data['assignee_id']);
 
         $task->update($data);
 
@@ -244,7 +310,13 @@ class TaskController extends Controller
             $task->setStatus($status);
         }
 
-        return response()->json(['data' => new TaskResource($task->fresh())]);
+        $this->applyOwners($task, $owners);
+
+        return response()->json([
+            'data' => new TaskResource(
+                $task->fresh()->load(['assignee', 'department', 'assignees', 'departments'])
+            ),
+        ]);
     }
 
     public function destroy(Task $task): JsonResponse

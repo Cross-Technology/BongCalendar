@@ -38,6 +38,12 @@ class TaskResource extends JsonResource
             'created_by' => $this->created_by,
             'assignee_id' => $this->assignee_id,
             'assignee' => new UserResource($this->whenLoaded('assignee')),
+            // The full sets. `department_id` / `assignee_id` above are the
+            // first of each, for clients that show only one name.
+            'department_ids' => $this->whenLoaded('departments', fn () => $this->departments->pluck('id')),
+            'departments' => DepartmentResource::collection($this->whenLoaded('departments')),
+            'assignee_ids' => $this->whenLoaded('assignees', fn () => $this->assignees->pluck('id')),
+            'assignees' => UserResource::collection($this->whenLoaded('assignees')),
             'creator' => new UserResource($this->whenLoaded('creator')),
             'department' => new DepartmentResource($this->whenLoaded('department')),
             'subtasks' => TaskResource::collection($this->whenLoaded('subtasks')),

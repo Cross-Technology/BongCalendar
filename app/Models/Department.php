@@ -61,10 +61,15 @@ class Department extends Model
             ->withTimestamps();
     }
 
-    /** @return HasMany<Task, $this> */
-    public function tasks(): HasMany
+    /**
+     * Every task filed under this department, including ones it shares with
+     * another team — shared work counts for both of them.
+     *
+     * @return BelongsToMany<Task, $this>
+     */
+    public function tasks(): BelongsToMany
     {
-        return $this->hasMany(Task::class);
+        return $this->belongsToMany(Task::class, 'department_task')->withTimestamps();
     }
 
     /** @return HasMany<Calendar, $this> */
