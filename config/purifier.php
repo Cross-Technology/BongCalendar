@@ -17,6 +17,59 @@
  * @link http://htmlpurifier.org/live/configdoc/plain.html
  */
 
+/*
+ * Rich text — daily reports and notes. The allowlist is exactly what the
+ * editor can emit and nothing else — no iframe, no style attributes, no inline
+ * CSS — so a crafted paste or a hand-rolled PATCH cannot smuggle script into
+ * something every member will read.
+ */
+$richText = [
+    'HTML.Doctype' => 'HTML 4.01 Transitional',
+    // `s` and `h2` are what the editor writes; `del` and `div` are kept
+    // because everything written before it does still has them.
+    'HTML.Allowed' => 'div,p,br,strong,em,s,del,a[href],h1,h2,blockquote,pre,ul,ol,li',
+    'CSS.AllowedProperties' => '',
+    // javascript: and data: URLs never survive this.
+    'URI.AllowedSchemes' => ['http' => true, 'https' => true, 'mailto' => true],
+    'HTML.TargetBlank' => true,
+    'HTML.Nofollow' => true,
+    // The editor lays its own blocks out; auto-paragraphing rewrites them.
+    'AutoFormat.AutoParagraph' => false,
+    'AutoFormat.RemoveEmpty' => true,
+];
+
+/*
+ * The same, plus pictures — notes only.
+ *
+ * Reports deliberately do not get this: nothing in the report editor can
+ * produce an image, so an <img> in a report body did not come from a writer
+ * and has no business being kept.
+ */
+$richTextWithImages = array_merge($richText, [
+    'HTML.Allowed' => $richText['HTML.Allowed'].',img[src|alt|width|height]',
+    /*
+     * Images must be ours, and this is what enforces it.
+     *
+     * The rule rejects any *embedded* URL that carries a host, and URI.Host is
+     * deliberately left unset so that means every one of them.
+     * Attachment::inlineSrc() writes a root-relative `/attachments/…` path,
+     * which has no host and passes; a pasted
+     * `<img src="https://tracker.example/pixel.gif">` does not, so a note
+     * cannot report back to whoever wrote it who opened it and when. Embedded
+     * resources only — ordinary external links are untouched.
+     */
+    'URI.DisableExternalResources' => true,
+    /*
+     * An image with no alt gets an empty one, not an invented one.
+     *
+     * Left to itself HTMLPurifier fills a missing alt from the last segment of
+     * the src — and ours is `/attachments/12`, so a screen reader would read
+     * the picture out as "12". An empty alt at least says "this has no
+     * description" rather than a lie.
+     */
+    'Attr.DefaultImageAlt' => '',
+]);
+
 return [
     'encoding' => 'UTF-8',
     'finalize' => true,
@@ -31,27 +84,8 @@ return [
             'AutoFormat.AutoParagraph' => true,
             'AutoFormat.RemoveEmpty' => true,
         ],
-        /*
-         * Rich text — daily reports and notes. The allowlist is exactly what
-         * the editor can emit and
-         * nothing else — no img, no iframe, no style attributes, no inline
-         * CSS — so a crafted paste or a hand-rolled PATCH cannot smuggle
-         * script or a tracking pixel into something every member will read.
-         */
-        'rich_text' => [
-            'HTML.Doctype' => 'HTML 4.01 Transitional',
-            // `s` and `h2` are what the editor writes; `del` and `div` are
-            // kept because everything written before it does still has them.
-            'HTML.Allowed' => 'div,p,br,strong,em,s,del,a[href],h1,h2,blockquote,pre,ul,ol,li',
-            'CSS.AllowedProperties' => '',
-            // javascript: and data: URLs never survive this.
-            'URI.AllowedSchemes' => ['http' => true, 'https' => true, 'mailto' => true],
-            'HTML.TargetBlank' => true,
-            'HTML.Nofollow' => true,
-            // The editor lays its own blocks out; auto-paragraphing rewrites them.
-            'AutoFormat.AutoParagraph' => false,
-            'AutoFormat.RemoveEmpty' => true,
-        ],
+        'rich_text' => $richText,
+        'rich_text_images' => $richTextWithImages,
 
         'test' => [
             'Attr.EnableID' => 'true',

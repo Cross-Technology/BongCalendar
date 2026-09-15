@@ -14,7 +14,7 @@ use Illuminate\Support\Number;
  * uploader called it; the bytes live under a generated path, so the original
  * name is only ever shown, never used to address the file.
  */
-#[Fillable(['tenant_id', 'attachable_type', 'attachable_id', 'uploaded_by', 'disk', 'path', 'original_name', 'mime_type', 'size'])]
+#[Fillable(['tenant_id', 'attachable_type', 'attachable_id', 'is_embedded', 'uploaded_by', 'disk', 'path', 'original_name', 'mime_type', 'size'])]
 class Attachment extends Model
 {
     use HasFactory;
@@ -31,8 +31,18 @@ class Attachment extends Model
      */
     public const ALLOWED_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'gif', 'webp'];
 
+    /** The subset that can be drawn inside a note body. */
+    public const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+
     /** Types safe to show in the browser rather than push straight to disk. */
     public const INLINE_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+
+    protected function casts(): array
+    {
+        return [
+            'is_embedded' => 'boolean',
+        ];
+    }
 
     /**
      * What PHP itself will accept, in kilobytes.
@@ -89,6 +99,21 @@ class Attachment extends Model
         return ['file', 'max:'.self::MAX_KILOBYTES, 'mimes:'.implode(',', self::ALLOWED_EXTENSIONS)];
     }
 
+    /**
+     * Validation for an image going *inside* a note.
+     *
+     * Narrower than uploadRules on purpose: this file is rendered as markup to
+     * everyone who can read the note, so only the picture formats a browser
+     * draws are accepted — never a PDF, and never SVG, which is a document
+     * that can carry script.
+     *
+     * @return array<int, string>
+     */
+    public static function imageRules(): array
+    {
+        return ['file', 'image', 'max:'.self::MAX_KILOBYTES, 'mimes:'.implode(',', self::IMAGE_EXTENSIONS)];
+    }
+
     /** @return MorphTo<Model, $this> */
     public function attachable(): MorphTo
     {
@@ -127,8 +152,28 @@ class Attachment extends Model
         return Number::fileSize($this->size, precision: $this->size >= 1048576 ? 1 : 0);
     }
 
+    /** True while an embedded image is still waiting for its note to be saved. */
+    public function isOrphan(): bool
+    {
+        return $this->attachable_id === null;
+    }
+
     public function downloadUrl(): string
     {
         return route('attachments.download', $this);
+    }
+
+    /**
+     * The `src` written into a note body — deliberately root-relative.
+     *
+     * The sanitiser refuses any embedded URL that carries a host
+     * (config/purifier.php), which is what stops a crafted note from pulling
+     * in an off-site tracking pixel. A relative path has no host, so ours
+     * survive that rule wherever the app is served from — behind a tunnel, on
+     * a staging domain, or on localhost with a different port than APP_URL.
+     */
+    public function inlineSrc(): string
+    {
+        return route('attachments.download', $this, absolute: false);
     }
 }

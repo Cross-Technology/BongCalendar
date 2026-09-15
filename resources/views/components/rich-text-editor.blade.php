@@ -3,6 +3,14 @@
     'placeholder' => '',
     'key' => 'editor',
     'minHeight' => '14rem',
+    // Opt-in: only notes let you put a picture in the body. Reports do not,
+    // and turning it on for them would also mean deciding what their
+    // attachments look like.
+    'images' => false,
+    // The note being edited, so an image can be hung off it straight away.
+    // Null while a new note is still being composed — the upload is stored
+    // unparented and adopted when the note is saved.
+    'noteId' => null,
 ])
 
 @php
@@ -29,7 +37,12 @@
 --}}
 <div wire:ignore
      wire:key="{{ $key }}"
-     x-data="quillEditor(@js($model), @js($placeholder))"
+     x-data="quillEditor(@js($model), @js($placeholder), @js($images ? [
+         'url' => route('attachments.inline'),
+         'noteId' => $noteId,
+         'accept' => collect(\App\Models\Attachment::IMAGE_EXTENSIONS)->map(fn ($ext) => '.'.$ext)->implode(','),
+         'maxBytes' => \App\Models\Attachment::effectiveMaxKilobytes() * 1024,
+     ] : null))"
      x-init="mount()"
      x-on:rich-text-insert.window="insert($event.detail?.html)"
      {{ $attributes->merge(['class' => 'rich-editor']) }}>
@@ -83,6 +96,20 @@
                 </button>
             </span>
 
+            @if ($images)
+                <span class="rich-editor__group">
+                    {{-- ql-image, so Quill routes the click to the handler that
+                         uploads and inserts rather than to its own base64 one. --}}
+                    <button type="button" class="ql-image" title="Insert image" aria-label="Insert image">
+                        <svg {!! $svg !!}>
+                            <rect x="3" y="4.25" width="14" height="11.5" rx="2"/>
+                            <circle cx="7.75" cy="8.25" r="1.15"/>
+                            <path d="m3.75 13.5 3.6-3.2a1.4 1.4 0 0 1 1.85 0l2.2 2 1.6-1.3a1.4 1.4 0 0 1 1.8.05l3.2 2.9"/>
+                        </svg>
+                    </button>
+                </span>
+            @endif
+
             <span class="rich-editor__group">
                 <button type="button" class="ql-link" title="Insert link" aria-label="Insert link">
                     <svg {!! $svg !!}>
@@ -101,6 +128,17 @@
         </div>
 
         <div x-ref="editor" style="min-height: {{ $minHeight }}"></div>
+
+        @if ($images)
+            {{-- The picture is uploaded before it can be drawn, so on a slow
+                 connection there is a gap between choosing it and seeing it.
+                 Saying so beats an editor that looks like it ignored the click. --}}
+            <p x-show="uploading" x-cloak aria-live="polite"
+               class="mt-1.5 text-[12px] font-semibold text-ink-400">Uploading image…</p>
+
+            <p x-show="uploadError" x-cloak x-text="uploadError" aria-live="polite"
+               class="mt-1.5 text-[13px] font-medium text-red-600"></p>
+        @endif
     </div>
 
     {{-- Shown only if the editor could not start, so a failure costs

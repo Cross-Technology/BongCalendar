@@ -34,11 +34,45 @@ const retireEditor = (container) => {
  * What the editor is allowed to produce.
  *
  * Deliberately the same shortlist the server allows (config/purifier.php):
- * anything else — colours, fonts, images, tables — would be typed happily and
- * then stripped on save, which reads as the editor losing your work. Capping
- * it here means what you see is what is stored.
+ * anything else — colours, fonts, tables — would be typed happily and then
+ * stripped on save, which reads as the editor losing your work. Capping it
+ * here means what you see is what is stored.
+ *
+ * `image` is added only where the caller passes an upload config, because only
+ * notes accept pictures; in a report the button is absent and so is the format.
  */
 const FORMATS = ['bold', 'italic', 'strike', 'header', 'blockquote', 'code-block', 'list', 'link'];
+
+/*
+ * Where an image in a body is allowed to come from.
+ *
+ * The same rule the sanitiser applies (URI.DisableExternalResources in
+ * config/purifier.php), enforced again in the editor so the two agree: an
+ * image pasted in from another site would be shown while typing and then
+ * silently dropped on save, which looks exactly like losing your work.
+ */
+const isLocalImage = (src) => typeof src === 'string' && src.startsWith('/attachments/');
+
+/** The CSRF token, for the one upload that does not go through Livewire. */
+const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.content ?? '';
+
+/**
+ * Turns a failed upload into something worth showing.
+ *
+ * A rejected file is a 422 carrying the validation message — "The image must
+ * not be greater than 5120 kilobytes" — which is the useful thing to say. A
+ * body too big for PHP never reaches Laravel and comes back as HTML, so the
+ * parse is allowed to fail and a plain sentence stands in.
+ */
+const uploadFailureMessage = async (response) => {
+    try {
+        const body = await response.json();
+
+        return body?.errors?.file?.[0] ?? body?.message ?? null;
+    } catch {
+        return null;
+    }
+};
 
 document.addEventListener('alpine:init', () => {
     /*
@@ -54,7 +88,7 @@ document.addEventListener('alpine:init', () => {
      *
      * Only `failed` stays on the component, because x-show has to react to it.
      */
-    window.Alpine.data('quillEditor', (model, placeholder = '') => {
+    window.Alpine.data('quillEditor', (model, placeholder = '', imageUpload = null) => {
         let quill = null;
         let lastRange = null;
         let queued = [];
@@ -62,6 +96,11 @@ document.addEventListener('alpine:init', () => {
 
         return {
             failed: false,
+
+            // On the component rather than in the closure, because the
+            // "uploading" line and the error message are bound to them.
+            uploading: false,
+            uploadError: '',
 
             async mount() {
                 const host = this.$refs.editor;
@@ -98,16 +137,62 @@ document.addEventListener('alpine:init', () => {
                     icons.set(button, button.innerHTML);
                 });
 
+                const modules = {
+                    toolbar: {
+                        container: this.$refs.toolbar,
+                        // Quill's own image handler inlines the file as a
+                        // base64 data URL. That would be stripped on save —
+                        // data: is not an allowed scheme — and a note's markup
+                        // is not the place to carry a megabyte of image, so
+                        // the picker and the upload are ours.
+                        handlers: imageUpload ? { image: () => this.pickImage() } : {},
+                    },
+                };
+
+                if (imageUpload) {
+                    /*
+                     * Pasting a screenshot and dragging a file in are the two
+                     * ways people actually put a picture in a note, and Quill
+                     * routes both through its uploader. Same upload as the
+                     * button; left alone, its default handler writes base64.
+                     *
+                     * Added rather than set to undefined, because the key
+                     * being present at all is what Quill reads as a
+                     * configured module.
+                     */
+                    modules.uploader = {
+                        mimetypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
+                        handler: (range, files) => this.uploadImages(files, range?.index),
+                    };
+                }
+
                 quill = new Quill(host, {
                     theme: 'snow',
                     placeholder,
-                    formats: FORMATS,
-                    modules: { toolbar: this.$refs.toolbar },
+                    formats: imageUpload ? [...FORMATS, 'image'] : FORMATS,
+                    modules,
                 });
 
                 icons.forEach((html, button) => {
                     button.innerHTML = html;
                 });
+
+                if (imageUpload) {
+                    /*
+                     * Paste a block of text from a web page and its pictures
+                     * come along, pointing at that site. The sanitiser refuses
+                     * them, so keeping them here would show the writer an image
+                     * that vanishes the moment they save. Dropping them on the
+                     * way in makes the editor tell the truth — and it leaves
+                     * our own `/attachments/…` images alone, so copying a
+                     * paragraph from one note into another still carries them.
+                     */
+                    const Delta = Quill.import('delta');
+
+                    quill.clipboard.addMatcher('IMG', (node, delta) => (
+                        isLocalImage(node.getAttribute('src')) ? delta : new Delta()
+                    ));
+                }
 
                 // Handlers before the content is loaded: if loading ever throws,
                 // the editor must still sync what gets typed afterwards.
@@ -183,9 +268,152 @@ document.addEventListener('alpine:init', () => {
                     return '';
                 }
 
+                // getText() counts characters, and an embed is not one — so a
+                // note that is nothing but a pasted screenshot reads as empty
+                // and would be thrown away on save. Ask the document instead.
+                const hasEmbed = quill.getContents().ops.some((op) => typeof op.insert === 'object');
+
                 // An untouched editor still holds "<p><br></p>", which is markup
                 // but not a report.
-                return quill.getText().trim() === '' ? '' : quill.getSemanticHTML().trim();
+                return quill.getText().trim() === '' && !hasEmbed ? '' : quill.getSemanticHTML().trim();
+            },
+
+            /* ------------------------------------------------------- images */
+
+            /**
+             * The cursor, or the end of the note if there is not one.
+             *
+             * Asked of Quill rather than read off `lastRange`: the remembered
+             * range is only as fresh as the last selection-change, and typing
+             * does not always produce one, so it can still say 0 after a
+             * paragraph has been written.
+             */
+            caret() {
+                return quill.getSelection()?.index
+                    ?? lastRange?.index
+                    ?? Math.max(quill.getLength() - 1, 0);
+            },
+
+            /**
+             * The toolbar button. A hidden input rather than a styled one: it
+             * exists for a single click and is thrown away, so nothing has to
+             * be kept in the DOM or reset between pictures.
+             */
+            pickImage() {
+                if (!imageUpload || !quill) {
+                    return;
+                }
+
+                /*
+                 * Where the cursor is *now*, read while the editor still has
+                 * it. Opening the file dialog takes the focus away, and by the
+                 * time a file comes back the selection is long gone — which is
+                 * how a picture ends up at the top of a note that was already
+                 * half written.
+                 */
+                const at = this.caret();
+
+                const input = document.createElement('input');
+
+                input.type = 'file';
+                input.accept = imageUpload.accept ?? 'image/*';
+                input.multiple = true;
+
+                input.addEventListener('change', () => {
+                    this.uploadImages(input.files, at);
+                });
+
+                input.click();
+            },
+
+            /**
+             * Uploads each picture and draws it where the cursor is.
+             *
+             * One at a time, awaited: two uploads racing would insert in
+             * whichever order the network happened to finish, which is not the
+             * order they were picked in.
+             */
+            async uploadImages(files, index = null) {
+                const images = Array.from(files ?? []).filter((file) => file.type?.startsWith('image/'));
+
+                if (images.length === 0 || !imageUpload) {
+                    return;
+                }
+
+                this.uploadError = '';
+                this.uploading = true;
+
+                // Where the first one lands. After that each insert moves the
+                // cursor on, so the rest follow it.
+                let at = index ?? this.caret();
+
+                try {
+                    for (const file of images) {
+                        at = await this.uploadImage(file, at);
+                    }
+                } finally {
+                    this.uploading = false;
+                }
+            },
+
+            /** @returns the index the next image should go at. */
+            async uploadImage(file, at) {
+                /*
+                 * Checked here as well as on the server, because a file over
+                 * PHP's own post limit is thrown away before any of our
+                 * validation runs — the request comes back as a bare 413 with
+                 * nothing to say why. The server is still the authority.
+                 */
+                if (imageUpload.maxBytes && file.size > imageUpload.maxBytes) {
+                    this.uploadError = `${file.name} is too large — images can be up to `
+                        + `${Math.round(imageUpload.maxBytes / 1048576)}MB.`;
+
+                    return at;
+                }
+
+                const body = new FormData();
+
+                body.append('file', file);
+
+                if (imageUpload.noteId) {
+                    body.append('note_id', imageUpload.noteId);
+                }
+
+                try {
+                    const response = await fetch(imageUpload.url, {
+                        method: 'POST',
+                        body,
+                        credentials: 'same-origin',
+                        headers: { 'X-CSRF-TOKEN': csrfToken(), Accept: 'application/json' },
+                    });
+
+                    if (!response.ok) {
+                        this.uploadError = await uploadFailureMessage(response)
+                            ?? `${file.name} could not be uploaded.`;
+
+                        return at;
+                    }
+
+                    const { url } = await response.json();
+
+                    quill.insertEmbed(at, 'image', url, 'user');
+
+                    // Past the image, so the next one — or the next thing
+                    // typed — goes after it rather than in front of it.
+                    const next = at + 1;
+
+                    quill.setSelection(next, 0, 'silent');
+                    lastRange = { index: next, length: 0 };
+
+                    this.sync();
+
+                    return next;
+                } catch {
+                    // Offline, or the request never landed.
+                    this.uploadError = `${file.name} could not be uploaded — check your connection.`;
+
+                    return at;
+                }
             },
 
             /** Writes markup in at the cursor — a task pulled into a report. */

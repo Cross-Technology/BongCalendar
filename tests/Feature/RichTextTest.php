@@ -315,11 +315,99 @@ class RichTextTest extends TestCase
             $this->assertStringContainsString($tag, $allowed, "The editor can write `{$tag}`, so it must survive.");
         }
 
+        // Pictures are a note's alone. A report body has no way to make one,
+        // so the profile it is cleaned with must not keep one either.
+        $this->assertStringNotContainsString('img', $allowed);
+        $this->assertStringContainsString('img[src', config('purifier.settings.rich_text_images')['HTML.Allowed']);
+
         $js = file_get_contents(resource_path('js/app.js'));
 
         // Formats with no home in the allowlist must not be on the toolbar.
-        foreach (['image', 'video', 'color', 'background', 'font', 'size', 'table'] as $format) {
+        foreach (['video', 'color', 'background', 'font', 'size', 'table'] as $format) {
             $this->assertStringNotContainsString("'{$format}'", $js, "`{$format}` would be stripped on save.");
         }
+    }
+
+    /**
+     * Only notes take pictures, and the report editor cannot make one — so an
+     * <img> in a report body was not put there by a writer.
+     */
+    public function test_a_report_body_never_keeps_an_image(): void
+    {
+        $clean = app(RichTextService::class)->sanitize('<p>Done</p><img src="/attachments/12" alt="">');
+
+        $this->assertStringNotContainsString('<img', $clean);
+        $this->assertStringContainsString('Done', $clean);
+    }
+
+    /**
+     * An image in a note body has to be one this app is serving.
+     *
+     * The allowlist gained `img` so a note can carry a picture, which would
+     * otherwise be an opening for a tracking pixel: a note is read by the
+     * whole workspace, so an off-site image would report who opened it and
+     * when, to whoever wrote the note.
+     */
+    public function test_a_note_body_keeps_our_images_and_drops_everyone_else_s(): void
+    {
+        $richText = app(RichTextService::class);
+
+        $ours = $richText->sanitize('<p>Before</p><img src="/attachments/12" alt="A photo"><p>After</p>', images: true);
+
+        $this->assertStringContainsString('src="/attachments/12"', $ours);
+
+        foreach ([
+            '<img src="https://tracker.example/pixel.gif">',
+            '<img src="http://tracker.example/pixel.gif">',
+            '<img src="//tracker.example/pixel.gif">',
+            '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">',
+        ] as $markup) {
+            $this->assertStringNotContainsString(
+                'tracker.example',
+                $richText->sanitize("<p>Note</p>{$markup}", images: true),
+                "`{$markup}` must not survive.",
+            );
+
+            $this->assertStringNotContainsString('data:', $richText->sanitize("<p>Note</p>{$markup}", images: true));
+        }
+    }
+
+    /** An external link is not an embedded resource, and must still work. */
+    public function test_external_links_are_untouched_by_the_image_rule(): void
+    {
+        $clean = app(RichTextService::class)->sanitize('<p><a href="https://example.com/spec">the spec</a></p>', images: true);
+
+        $this->assertStringContainsString('https://example.com/spec', $clean);
+    }
+
+    /**
+     * A note that is one pasted screenshot has no words in it at all, and
+     * judging a body on its text alone would refuse to save the very thing
+     * the writer just put there.
+     */
+    public function test_a_body_that_is_only_an_image_is_not_blank(): void
+    {
+        $richText = app(RichTextService::class);
+
+        $this->assertFalse($richText->isBlank('<p><br></p><img src="/attachments/4" alt=""><p><br></p>', images: true));
+        $this->assertTrue($richText->isBlank('<p><br></p>', images: true));
+        // Stripped before it counts: an image the sanitiser refuses is not in
+        // the note, so it cannot be what makes the note non-empty.
+        $this->assertTrue($richText->isBlank('<p><br></p><img src="https://tracker.example/pixel.gif">', images: true));
+    }
+
+    /** The ids a saved body references — what save() ties files to the note by. */
+    public function test_the_attachment_ids_a_body_draws_are_read_back_out_of_it(): void
+    {
+        $richText = app(RichTextService::class);
+
+        $ids = $richText->embeddedAttachmentIds(
+            '<img src="/attachments/12" alt=""><p>text</p><img src="/attachments/3?v=2">'
+            .'<img src="/attachments/12"><img src="https://elsewhere.test/attachments/9">'
+        );
+
+        // 12 once despite appearing twice, and the off-site one is not a
+        // reference to attachment 9.
+        $this->assertSame([12, 3], $ids);
     }
 }

@@ -215,6 +215,7 @@ default (`visibility: tenant`); its author can keep it to themselves with
 | GET / PATCH / DELETE | `/notes/{note}` | Editing is the author's, or an admin's on a *shared* note. Only the author changes `visibility`. |
 | POST | `/notes/{note}/pin` | Toggles, or takes `{"is_pinned": true\|false}`. |
 | POST | `/notes/{note}/attachments` | `multipart/form-data` with `file`. |
+| POST | `/attachments/inline` | An image for the body rather than the file list. `multipart/form-data` with `file`, plus `note_id` when the note already exists. Returns `{id, url, name}`; put `url` in an `<img src>` in the body and the next save ties them together. |
 | GET / DELETE | `/attachments/{attachment}` | Streams or removes one file. |
 
 The report editor shows that department's tasks for the day — status, priority,
@@ -223,7 +224,7 @@ which write them into the editor as formatted lines. The day's list also shows a
 per-department task strip, so the page answers "what were they actually doing?"
 without opening anything.
 
-Note bodies are **rich text**: `body` is sanitised HTML and `body_text` its
+Note bodies are **rich text** and may carry images inline: `body` is sanitised HTML and `body_text` its
 plain-text rendering, used for search and previews. Both go through
 `RichTextService`, which reports share — see [Rich text and attachments](#rich-text-and-attachments).
 
@@ -288,16 +289,29 @@ tag happens to split.
 
 **HTML is sanitised on the way in, never on the way out.** Bodies are user input
 rendered back as markup to a whole workspace, so everything funnels through
-`RichTextService` and the `rich_text` HTMLPurifier profile in
-`config/purifier.php` — an allowlist of exactly what the editor emits. `script`,
-`img`, `iframe`, `on*` handlers, inline CSS and `javascript:` URLs do not survive
-it. Nothing but `RichTextService` should write those columns.
+`RichTextService` and the HTMLPurifier profiles in `config/purifier.php` — an
+allowlist of exactly what the editor emits. `script`, `iframe`, `on*` handlers,
+inline CSS and `javascript:` URLs do not survive it. Nothing but
+`RichTextService` should write those columns.
+
+There are two profiles, and which one applies is the difference between a note
+and a report:
+
+| Profile | Used by | Difference |
+| --- | --- | --- |
+| `rich_text` | Reports, report headers | No `img` at all. |
+| `rich_text_images` | Notes | Adds `img`, restricted to this app's own files. |
+
+Call it with `sanitize($html, images: true)` for a note. Reports do not get
+images because nothing in their editor can produce one, so an `<img>` in a
+report body was not put there by a writer.
 
 The editor is one Blade component, `<x-rich-text-editor>`, used by reports,
 report headers and notes. Only Quill's *core* stylesheet is loaded — the toolbar
 markup is ours — and the format list it offers is deliberately the same shortlist
 `config/purifier.php` allows, so nothing can be typed that the server then
-strips.
+strips. The image button is opt-in (`:images="true"`), so it appears on notes
+and nowhere else.
 
 One Quill quirk worth knowing: in the DOM it renders **both** list types as
 `<ul>` with the real type hidden on `li[data-list]`. Saving `innerHTML` would
@@ -306,6 +320,34 @@ attribute, so the editor saves `getSemanticHTML()` instead, which emits proper
 `<ol>`/`<ul>`. For the same reason list markers are styled for `.rich-text`
 only: inside the editor Quill draws its own, and dressing them twice shows two
 bullets per line.
+
+#### Images inside a note
+
+A note can carry pictures in the body itself — inserted from the toolbar,
+pasted, or dragged in — rather than only as files listed underneath it.
+
+An image is uploaded the moment it is dropped in, because it needs a URL before
+it can be drawn, which is earlier than the note exists. So `attachable` is
+nullable: the row starts **unparented**, readable by nobody but its uploader
+(`AttachmentPolicy`), and the save adopts it. Adoption is driven by the saved
+markup, not by what the editor claims it did — `RichTextService::embeddedAttachmentIds()`
+reads the ids back out of the body and `AttachmentService::syncEmbedded()` hangs
+those off the note and deletes any it no longer references, bytes included. A
+composer closed without saving leaves orphans that nothing can reach;
+`attachments:prune-orphans` (scheduled daily) collects them after a day.
+
+`is_embedded` separates a picture inside the body from a file listed under it,
+so the same image is never shown twice. `Note::files()` is the list; the body is
+everything else.
+
+**Images must be ours.** `URI.DisableExternalResources` rejects any embedded URL
+carrying a host, and `URI.Host` is deliberately unset so that means all of them.
+`Attachment::inlineSrc()` writes a root-relative `/attachments/{id}`, which has
+no host and passes; `<img src="https://tracker.example/pixel.gif">` does not, so
+a note read by the whole workspace cannot report back who opened it and when.
+Ordinary external *links* are untouched — the rule applies only to embedded
+resources. The editor drops off-site images on paste for the same reason, so it
+does not show you something the save would silently throw away.
 
 **Attachments** (notes today; the table is polymorphic, so reports are the
 obvious next one) accept PDF, Word, Excel and ordinary images up to **5 MB**.

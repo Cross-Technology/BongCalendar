@@ -419,6 +419,40 @@ body:has([data-modal]) .app-scroll {
 }
 
 /*
+ * Images in a note body — the same in the editor and in the saved note, so
+ * what is written is what is read.
+ *
+ * `display: block` because Quill inserts an image as an inline embed: left
+ * inline it sits on the text baseline with a strip of descender space under
+ * it, and two in a row line up side by side rather than stacking. The height
+ * cap keeps a phone photo from pushing the rest of the note off the screen —
+ * the picture is part of the note, not the whole of it.
+ */
+:is(.rich-text, .ql-editor) img {
+    display: block;
+    max-width: 100%;
+    max-height: 26rem;
+    width: auto;
+    height: auto;
+    border-radius: 0.75rem;
+    /* A pale photo on a white note needs an edge to read as a picture. */
+    border: 1px solid var(--color-ink-200);
+    object-fit: contain;
+}
+
+[data-theme='dark'] :is(.rich-text, .ql-editor) img {
+    border-color: var(--color-ink-700);
+}
+
+/*
+ * A selected image in the editor. Quill has no styling of its own for this,
+ * and without it there is no sign which picture the Delete key will take.
+ */
+.ql-editor img::selection {
+    background: var(--color-brand-200);
+}
+
+/*
  * Lists: saved markup only.
  *
  * Inside the editor Quill draws its own markers with `li[data-list] > .ql-ui`

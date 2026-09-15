@@ -17,9 +17,28 @@ class RichTextService
     /** The allowlist in config/purifier.php — exactly what the editor emits. */
     public const PURIFIER_PROFILE = 'rich_text';
 
-    public function sanitize(string $html): string
+    /**
+     * The same allowlist plus `img`, for the one place that can produce one.
+     *
+     * Kept separate rather than merged into the profile above: the report
+     * editor has no way to insert a picture, so an image in a report body was
+     * put there by something other than a writer, and the narrower profile is
+     * what says so.
+     */
+    public const PURIFIER_PROFILE_WITH_IMAGES = 'rich_text_images';
+
+    /**
+     * @param  bool  $images  True only for notes, the one body that may carry
+     *                        a picture.
+     */
+    public function sanitize(string $html, bool $images = false): string
     {
-        return trim(Purifier::clean($html, self::PURIFIER_PROFILE));
+        return trim(Purifier::clean($html, $this->profile($images)));
+    }
+
+    protected function profile(bool $images): string
+    {
+        return $images ? self::PURIFIER_PROFILE_WITH_IMAGES : self::PURIFIER_PROFILE;
     }
 
     /**
@@ -44,10 +63,44 @@ class RichTextService
         return trim((string) $text);
     }
 
-    /** True when the editor sent markup but no actual words. */
-    public function isBlank(string $html): bool
+    /**
+     * True when the editor sent markup but nothing in it.
+     *
+     * An image counts as something. A note that is one pasted screenshot and
+     * no words has no text at all, and judging it on words alone would refuse
+     * to save the very thing the writer just put there.
+     */
+    public function isBlank(string $html, bool $images = false): bool
     {
-        return $this->toText($this->sanitize($html)) === '';
+        $clean = $this->sanitize($html, $images);
+
+        if (stripos($clean, '<img') !== false) {
+            return false;
+        }
+
+        return $this->toText($clean) === '';
+    }
+
+    /**
+     * The attachment ids of the images a body draws.
+     *
+     * Read back out of the saved markup rather than tracked as the writer
+     * types: the body is what the note actually shows, and a draft that was
+     * undone, re-pasted, or edited in two tabs makes any running tally wrong.
+     * Run this *after* sanitising — anything the sanitiser threw out is not in
+     * the note, and must not keep a file alive.
+     *
+     * @return array<int, int>
+     */
+    public function embeddedAttachmentIds(string $html): array
+    {
+        // `~` delimits, because the pattern itself has to match a `#` — the
+        // fragment on a src that carries one. The path is anchored rather than
+        // searched for: `https://elsewhere.test/attachments/9` must not count
+        // as a reference to attachment 9.
+        preg_match_all('~<img[^>]+src="/attachments/(\d+)(?:[?#][^"]*)?"~i', $html, $matches);
+
+        return array_values(array_unique(array_map('intval', $matches[1])));
     }
 
     /**

@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
@@ -53,10 +54,50 @@ class Note extends Model
         return $this->belongsTo(User::class, 'author_id');
     }
 
-    /** @return MorphMany<Attachment, $this> */
+    /**
+     * Everything hanging off the note — the files listed beneath it and the
+     * images drawn inside it. Mostly of interest to cleanup and policies;
+     * anything that renders a list wants `files()`.
+     *
+     * @return MorphMany<Attachment, $this>
+     */
     public function attachments(): MorphMany
     {
         return $this->morphMany(Attachment::class, 'attachable')->latest('id');
+    }
+
+    /**
+     * The attachments shown as a file list. Embedded images are excluded: they
+     * are already on screen inside the body, and repeating them underneath
+     * reads as the note having two copies of the same picture.
+     *
+     * @return MorphMany<Attachment, $this>
+     */
+    public function files(): MorphMany
+    {
+        return $this->attachments()->where('is_embedded', false);
+    }
+
+    /** The images drawn inside the body. @return MorphMany<Attachment, $this> */
+    public function inlineImages(): MorphMany
+    {
+        return $this->attachments()->where('is_embedded', true);
+    }
+
+    /**
+     * The first picture in the note, for the board card.
+     *
+     * A note whose body is one pasted screenshot has no text to preview, and
+     * without this its card is blank — the one thing it contains being the one
+     * thing the board would not show.
+     *
+     * @return MorphOne<Attachment, $this>
+     */
+    public function coverImage(): MorphOne
+    {
+        return $this->morphOne(Attachment::class, 'attachable')
+            ->where('is_embedded', true)
+            ->oldest('id');
     }
 
     /* --------------------------------------------------------------- scopes */

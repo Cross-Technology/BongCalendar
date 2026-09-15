@@ -81,8 +81,8 @@ class extends Component
             ->search($this->search)
             ->when($this->filter === 'mine', fn ($q) => $q->where('author_id', $user->id))
             ->when($this->filter === 'pinned', fn ($q) => $q->where('is_pinned', true))
-            ->with('author')
-            ->withCount('attachments')
+            ->with(['author', 'coverImage'])
+            ->withCount('files')
             ->boardOrder()
             ->paginate(12);
     }
@@ -194,7 +194,7 @@ class extends Component
             return null;
         }
 
-        $note = Note::with(['author', 'attachments.uploader'])->find($this->viewingId);
+        $note = Note::with(['author', 'files.uploader'])->find($this->viewingId);
 
         if (! $note || $this->currentUser()->cannot('view', $note)) {
             $this->viewingId = null;
@@ -261,13 +261,14 @@ class extends Component
 
         // An editor nobody typed in still posts "<div><br></div>", which is
         // markup but not a note.
-        if ($richText->isBlank($data['form_body'])) {
+        if ($richText->isBlank($data['form_body'], images: true)) {
             $this->addError('form_body', 'Write something before saving the note.');
 
             return;
         }
 
-        $body = $richText->sanitize($data['form_body']);
+        // `images: true` — a note is the one body that may carry a picture.
+        $body = $richText->sanitize($data['form_body'], images: true);
 
         $payload = [
             'title' => $data['form_title'] ?: null,
@@ -302,6 +303,16 @@ class extends Component
             $this->quick_body = '';
             $this->resetPage();
         }
+
+        // The body is the record of which pictures the note shows: images
+        // uploaded while it was being written are adopted here, and ones the
+        // writer deleted out again are dropped, bytes and all.
+        $attachments->syncEmbedded(
+            $note,
+            $richText->embeddedAttachmentIds($body),
+            $this->currentUser(),
+            $note->tenant_id,
+        );
 
         $this->attachPending($note, $attachments);
 
@@ -397,7 +408,7 @@ class extends Component
             'noteList' => $this->notes(),
             'viewingNote' => $this->viewingNote(),
             'editingNote' => $this->editingId
-                ? Note::with('attachments.uploader')->find($this->editingId)
+                ? Note::with('files.uploader')->find($this->editingId)
                 : null,
         ];
     }
@@ -543,12 +554,22 @@ class extends Component
                          rendering: dropping a clamped slice of HTML into the
                          card would cut a tag in half. Opening the card shows
                          the note in full. --}}
-                    <p class="line-clamp-6 whitespace-pre-line break-words text-[14px] leading-relaxed text-ink-600 dark:text-ink-300">{{ $note->body_text }}</p>
+                    @if ($note->body_text !== '')
+                        <p class="line-clamp-6 whitespace-pre-line break-words text-[14px] leading-relaxed text-ink-600 dark:text-ink-300">{{ $note->body_text }}</p>
+                    @endif
 
-                    @if ($note->attachments_count > 0)
+                    {{-- The first picture in the body. A note that is nothing
+                         but a screenshot has no text to preview, and a blank
+                         card would be hiding the only thing in it. --}}
+                    @if ($note->coverImage)
+                        <img src="{{ $note->coverImage->inlineSrc() }}" alt="" loading="lazy"
+                             class="max-h-44 w-full rounded-xl object-cover">
+                    @endif
+
+                    @if ($note->files_count > 0)
                         <p class="flex items-center gap-1.5 text-[12px] font-semibold text-ink-400">
                             <x-icon name="paperclip" class="size-3.5" />
-                            {{ $note->attachments_count }} {{ \Illuminate\Support\Str::plural('file', $note->attachments_count) }}
+                            {{ $note->files_count }} {{ \Illuminate\Support\Str::plural('file', $note->files_count) }}
                         </p>
                     @endif
 
@@ -657,14 +678,16 @@ class extends Component
                          writes this column. --}}
                     <div class="rich-text text-ink-700 dark:text-ink-200">{!! $viewingNote->body !!}</div>
 
-                    @if ($viewingNote->attachments->isNotEmpty())
+                    {{-- Files only. Images live inside the body above, and
+                         listing them again would show the same picture twice. --}}
+                    @if ($viewingNote->files->isNotEmpty())
                         <div class="mt-5 border-t border-ink-200/70 pt-4 dark:border-ink-800">
                             <h3 class="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-400">
-                                {{ $viewingNote->attachments->count() }} {{ \Illuminate\Support\Str::plural('file', $viewingNote->attachments->count()) }}
+                                {{ $viewingNote->files->count() }} {{ \Illuminate\Support\Str::plural('file', $viewingNote->files->count()) }}
                             </h3>
 
                             <ul class="flex flex-col gap-1.5">
-                                @foreach ($viewingNote->attachments as $attachment)
+                                @foreach ($viewingNote->files as $attachment)
                                     <li wire:key="att-{{ $attachment->id }}">
                                         <a href="{{ $attachment->downloadUrl() }}"
                                            class="group flex items-center gap-2.5 rounded-xl border border-ink-200 px-3 py-2 transition hover:border-brand-300 hover:bg-brand-50/40 dark:border-ink-700 dark:hover:border-brand-700 dark:hover:bg-brand-950/40">
@@ -745,6 +768,8 @@ class extends Component
                             <x-rich-text-editor
                                 model="form_body"
                                 placeholder="Write it down…"
+                                :images="true"
+                                :note-id="$editingId"
                                 key="note-editor-{{ $editingId ?? 'new' }}-{{ $editorSession }}" />
 
                             @error('form_body') <p class="mt-1.5 text-[13px] font-medium text-red-600">{{ $message }}</p> @enderror
@@ -784,9 +809,9 @@ class extends Component
                             @endif
 
                             {{-- Already saved against the note --}}
-                            @if ($editingNote && $editingNote->attachments->isNotEmpty())
+                            @if ($editingNote && $editingNote->files->isNotEmpty())
                                 <ul class="mt-2 flex flex-col gap-1.5">
-                                    @foreach ($editingNote->attachments as $attachment)
+                                    @foreach ($editingNote->files as $attachment)
                                         <li class="flex items-center gap-2.5 rounded-xl border border-ink-200 px-3 py-2 dark:border-ink-700"
                                             wire:key="saved-{{ $attachment->id }}">
                                             <span class="grid size-7 shrink-0 place-items-center rounded-lg bg-ink-100 text-[9px] font-bold uppercase text-ink-500 dark:bg-ink-800 dark:text-ink-300">

@@ -17,7 +17,18 @@ class AttachmentPolicy
     {
         $parent = $attachment->attachable;
 
-        return $parent !== null && $user->can('view', $parent);
+        /*
+         * An image uploaded into a note that has not been saved yet has no
+         * parent to inherit privacy from, so it falls back to the strictest
+         * reading: only the person composing it. The editor needs to render
+         * what they just dropped in, and nobody else has any business seeing a
+         * note that does not exist yet.
+         */
+        if ($parent === null) {
+            return $attachment->isOrphan() && $attachment->uploaded_by === $user->id;
+        }
+
+        return $user->can('view', $parent);
     }
 
     public function delete(User $user, Attachment $attachment): bool
@@ -25,7 +36,7 @@ class AttachmentPolicy
         $parent = $attachment->attachable;
 
         if ($parent === null) {
-            return false;
+            return $attachment->isOrphan() && $attachment->uploaded_by === $user->id;
         }
 
         return $attachment->uploaded_by === $user->id || $user->can('update', $parent);

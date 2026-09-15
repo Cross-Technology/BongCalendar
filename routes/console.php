@@ -18,3 +18,12 @@ Schedule::command('push:digests')
     ->hourly()
     ->withoutOverlapping()
     ->runInBackground();
+
+/*
+ * Images dropped into a note that was then abandoned. Daily is often enough:
+ * they are unreadable by anyone the moment the composer closes, so this is
+ * reclaiming disk space rather than closing a hole.
+ */
+Schedule::command('attachments:prune-orphans')
+    ->dailyAt('03:20')
+    ->withoutOverlapping();

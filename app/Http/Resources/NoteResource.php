@@ -31,8 +31,10 @@ class NoteResource extends JsonResource
             // Lets a client hide the edit affordance without a second call.
             'can_edit' => $user ? $user->can('update', $this->resource) : false,
             'author' => new UserResource($this->whenLoaded('author')),
-            'attachments' => AttachmentResource::collection($this->whenLoaded('attachments')),
-            'attachments_count' => $this->whenCounted('attachments'),
+            // Files only: images inside the body are already in `body`, and
+            // listing them here would have a client render each one twice.
+            'attachments' => AttachmentResource::collection($this->whenLoaded('files')),
+            'attachments_count' => $this->whenCounted('files'),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

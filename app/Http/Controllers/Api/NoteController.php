@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\NoteRequest;
 use App\Http\Resources\NoteResource;
 use App\Models\Note;
+use App\Services\AttachmentService;
 use App\Services\RichTextService;
 use App\Support\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -17,6 +18,7 @@ class NoteController extends Controller
     public function __construct(
         protected TenantContext $tenants,
         protected RichTextService $richText,
+        protected AttachmentService $attachments,
     ) {}
 
     /**
@@ -33,7 +35,7 @@ class NoteController extends Controller
             ->search($request->query('q'))
             ->when($request->boolean('mine'), fn ($q) => $q->where('author_id', $user->id))
             ->when($request->boolean('pinned'), fn ($q) => $q->where('is_pinned', true))
-            ->with(['author', 'attachments'])
+            ->with(['author', 'files'])
             ->boardOrder()
             ->paginate($request->integer('per_page') ?: 25)
             ->withQueryString();
@@ -47,11 +49,12 @@ class NoteController extends Controller
 
         $this->authorize('create', [Note::class, $tenant->id]);
 
-        if ($this->richText->isBlank($request->string('body'))) {
+        if ($this->richText->isBlank($request->string('body'), images: true)) {
             return $this->blankBody();
         }
 
-        $body = $this->richText->sanitize($request->string('body'));
+        // `images: true` — a note is the one body that may carry a picture.
+        $body = $this->richText->sanitize($request->string('body'), images: true);
 
         $note = Note::create([
             'tenant_id' => $tenant->id,
@@ -64,14 +67,16 @@ class NoteController extends Controller
             'is_pinned' => $request->boolean('is_pinned'),
         ]);
 
-        return response()->json(['data' => new NoteResource($note->load(['author', 'attachments']))], 201);
+        $this->syncImages($note, $body, $request);
+
+        return response()->json(['data' => new NoteResource($note->load(['author', 'files']))], 201);
     }
 
     public function show(Note $note): JsonResponse
     {
         $this->authorize('view', $note);
 
-        return response()->json(['data' => new NoteResource($note->load(['author', 'attachments.uploader']))]);
+        return response()->json(['data' => new NoteResource($note->load(['author', 'files.uploader']))]);
     }
 
     public function update(NoteRequest $request, Note $note): JsonResponse
@@ -85,17 +90,21 @@ class NoteController extends Controller
             : collect($request->validated())->except('visibility')->all();
 
         if (array_key_exists('body', $data)) {
-            if ($this->richText->isBlank($data['body'])) {
+            if ($this->richText->isBlank($data['body'], images: true)) {
                 return $this->blankBody();
             }
 
-            $data['body'] = $this->richText->sanitize($data['body']);
+            $data['body'] = $this->richText->sanitize($data['body'], images: true);
             $data['body_text'] = $this->richText->toText($data['body']);
         }
 
         $note->update($data);
 
-        return response()->json(['data' => new NoteResource($note->load(['author', 'attachments']))]);
+        if (array_key_exists('body', $data)) {
+            $this->syncImages($note, $data['body'], $request);
+        }
+
+        return response()->json(['data' => new NoteResource($note->load(['author', 'files']))]);
     }
 
     public function destroy(Note $note): JsonResponse
@@ -116,10 +125,27 @@ class NoteController extends Controller
             'is_pinned' => $request->has('is_pinned') ? $request->boolean('is_pinned') : ! $note->is_pinned,
         ]);
 
-        return response()->json(['data' => new NoteResource($note->load(['author', 'attachments']))]);
+        return response()->json(['data' => new NoteResource($note->load(['author', 'files']))]);
     }
 
     /** An editor left untouched still posts markup, but it is not a note. */
+    /**
+     * Ties the note to the pictures its body draws.
+     *
+     * A client uploads an image before the note exists (POST
+     * attachments/inline), so the row starts unparented; this is where it
+     * finds its note, and where one deleted out of the body is thrown away.
+     */
+    protected function syncImages(Note $note, string $body, Request $request): void
+    {
+        $this->attachments->syncEmbedded(
+            $note,
+            $this->richText->embeddedAttachmentIds($body),
+            $request->user(),
+            $note->tenant_id,
+        );
+    }
+
     protected function blankBody(): JsonResponse
     {
         return response()->json([

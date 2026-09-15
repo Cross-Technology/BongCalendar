@@ -101,6 +101,8 @@ Route::prefix('v1')->group(function () {
             // Files hanging off a note. Reads are streamed through the policy —
             // the disk is private, so there is no URL to share around.
             Route::post('notes/{note}/attachments', [AttachmentController::class, 'storeForNote']);
+            // An image to be drawn inside a note body rather than listed under it.
+            Route::post('attachments/inline', [AttachmentController::class, 'storeInline']);
             Route::get('attachments/{attachment}', [AttachmentController::class, 'download']);
             Route::delete('attachments/{attachment}', [AttachmentController::class, 'destroy']);
 

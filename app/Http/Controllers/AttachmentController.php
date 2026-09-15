@@ -62,6 +62,59 @@ class AttachmentController extends Controller
         return response()->json(['data' => new AttachmentResource($attachment)], 201);
     }
 
+    /**
+     * Takes an image the writer just dropped into a note body and hands back
+     * the URL to draw it at.
+     *
+     * Deliberately not a Livewire upload: the editor sits behind wire:ignore
+     * and needs the URL in the same gesture, so this answers a plain fetch
+     * with the one thing the editor needs.
+     *
+     * `note` is absent while a new note is still being composed. The file is
+     * stored unparented and is readable by nobody but its uploader until the
+     * note is saved and adopts it (AttachmentService::syncEmbedded), so a
+     * picture cannot be read by the workspace before the note carrying it
+     * exists.
+     */
+    public function storeInline(Request $request): JsonResponse
+    {
+        $request->validate([
+            'file' => array_merge(['required'], Attachment::imageRules()),
+            'note_id' => ['nullable', 'integer'],
+        ], attributes: ['file' => 'image']);
+
+        $note = $request->filled('note_id')
+            ? Note::findOrFail($request->integer('note_id'))
+            : null;
+
+        if ($note) {
+            $this->authorize('update', $note);
+            $tenantId = $note->tenant_id;
+        } else {
+            $tenantId = (int) $request->user()->current_tenant_id;
+
+            abort_if($tenantId === 0, 409, 'No workspace selected.');
+
+            $this->authorize('create', [Note::class, $tenantId]);
+        }
+
+        $attachment = $this->attachments->store(
+            $request->file('file'),
+            $note,
+            $request->user(),
+            $tenantId,
+            embedded: true,
+        );
+
+        return response()->json([
+            'id' => $attachment->id,
+            // Root-relative, because the sanitiser rejects an embedded URL
+            // that carries a host. See config/purifier.php.
+            'url' => $attachment->inlineSrc(),
+            'name' => $attachment->original_name,
+        ], 201);
+    }
+
     public function destroy(Attachment $attachment): JsonResponse
     {
         $this->authorize('delete', $attachment);

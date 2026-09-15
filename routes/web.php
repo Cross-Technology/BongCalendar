@@ -24,6 +24,10 @@ Route::middleware('auth')->group(function () {
     // Attachments live on a private disk, so every read is authorised here
     // rather than served straight off the filesystem.
     Route::get('/attachments/{attachment}', [AttachmentController::class, 'download'])->name('attachments.download');
+
+    // An image dropped into a note body, uploaded as it is dropped so the
+    // editor has something to draw straight away.
+    Route::post('/attachments/inline', [AttachmentController::class, 'storeInline'])->name('attachments.inline');
     Route::livewire('/invitations', 'pages::invitations')->name('invitations.index');
     Route::livewire('/workspaces', 'pages::workspaces')->name('workspaces.index');
 

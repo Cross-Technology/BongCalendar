@@ -565,4 +565,250 @@ class NotePageTest extends TestCase
     {
         $this->get('/notes')->assertRedirect('/login');
     }
+    /* ------------------------------------------------- images inside a note */
+
+    /**
+     * The whole point of the feature: a picture uploaded while the note is
+     * still being written has no note to hang off yet, so it is stored
+     * unparented and the save adopts it.
+     */
+    public function test_an_image_dropped_into_a_new_note_is_adopted_when_it_is_saved(): void
+    {
+        Storage::fake('local');
+
+        $response = $this->actingAs($this->owner)
+            ->post(route('attachments.inline'), ['file' => UploadedFile::fake()->image('site.jpg')]);
+
+        $response->assertCreated();
+
+        $attachment = Attachment::firstOrFail();
+
+        // No note yet, so nothing to hang it off.
+        $this->assertNull($attachment->attachable_id);
+        $this->assertTrue($attachment->is_embedded);
+        $this->assertSame("/attachments/{$attachment->id}", $response->json('url'));
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::notes')
+            ->call('create')
+            ->set('form_body', '<div>The site</div><img src="'.$attachment->inlineSrc().'" alt="">')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $note = Note::firstOrFail();
+
+        $this->assertSame($note->id, $attachment->refresh()->attachable_id);
+        $this->assertStringContainsString('src="/attachments/'.$attachment->id.'"', $note->body);
+        Storage::disk('local')->assertExists($attachment->path);
+    }
+
+    /** An image inside the body is not also a file listed underneath it. */
+    public function test_an_embedded_image_is_not_counted_as_an_attached_file(): void
+    {
+        Storage::fake('local');
+
+        $note = Note::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'author_id' => $this->owner->id,
+        ]);
+
+        $image = app(AttachmentService::class)->store(
+            UploadedFile::fake()->image('inline.png'), $note, $this->owner, $this->tenant->id, embedded: true,
+        );
+
+        $file = app(AttachmentService::class)->store(
+            UploadedFile::fake()->create('quote.pdf', 10, 'application/pdf'), $note, $this->owner, $this->tenant->id,
+        );
+
+        $this->assertSame([$file->id], $note->files()->pluck('id')->all());
+        $this->assertSame([$image->id], $note->inlineImages()->pluck('id')->all());
+        $this->assertSame(1, $note->loadCount('files')->files_count);
+    }
+
+    /**
+     * Deleting a picture out of the body has to take the file with it —
+     * otherwise every edit leaves bytes on the disk that nothing can reach.
+     */
+    public function test_an_image_deleted_out_of_the_body_is_removed_from_disk(): void
+    {
+        Storage::fake('local');
+
+        $note = Note::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'author_id' => $this->owner->id,
+        ]);
+
+        $image = app(AttachmentService::class)->store(
+            UploadedFile::fake()->image('inline.png'), $note, $this->owner, $this->tenant->id, embedded: true,
+        );
+
+        $note->update(['body' => '<div>Before</div><img src="'.$image->inlineSrc().'" alt="">']);
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::notes')
+            ->call('edit', $note->id)
+            ->set('form_body', '<div>The picture is gone</div>')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $this->assertDatabaseMissing('attachments', ['id' => $image->id]);
+        Storage::disk('local')->assertMissing($image->path);
+    }
+
+    /**
+     * An image quoted by id in a hand-written body must not be dragged onto
+     * someone else's note — the upload belongs to whoever made it.
+     */
+    public function test_another_members_orphan_image_cannot_be_claimed_by_a_note(): void
+    {
+        Storage::fake('local');
+
+        $member = $this->member();
+
+        $theirs = app(AttachmentService::class)->store(
+            UploadedFile::fake()->image('private.png'), null, $member, $this->tenant->id, embedded: true,
+        );
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::notes')
+            ->call('create')
+            ->set('form_body', '<div>Mine now</div><img src="'.$theirs->inlineSrc().'" alt="">')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        // The markup may quote the id, but the row never moves — and the
+        // download itself is still checked against the policy.
+        $this->assertNull($theirs->refresh()->attachable_id);
+
+        $this->actingAs($this->owner)->get($theirs->downloadUrl())->assertForbidden();
+    }
+
+    /** An upload nobody has a note for yet is readable by its uploader alone. */
+    public function test_an_unattached_image_is_private_to_whoever_uploaded_it(): void
+    {
+        Storage::fake('local');
+
+        $member = $this->member();
+
+        $this->actingAs($this->owner)
+            ->post(route('attachments.inline'), ['file' => UploadedFile::fake()->image('draft.png')])
+            ->assertCreated();
+
+        $attachment = Attachment::firstOrFail();
+
+        $this->actingAs($this->owner)->get($attachment->downloadUrl())->assertOk();
+        $this->actingAs($member)->get($attachment->downloadUrl())->assertForbidden();
+    }
+
+    /** Only pictures go in a body — a PDF is a file, and belongs in the list. */
+    public function test_the_inline_endpoint_refuses_anything_that_is_not_an_image(): void
+    {
+        Storage::fake('local');
+
+        $this->actingAs($this->owner)
+            ->post(route('attachments.inline'), [
+                'file' => UploadedFile::fake()->create('contract.pdf', 40, 'application/pdf'),
+            ])
+            ->assertSessionHasErrors('file');
+
+        $this->assertDatabaseCount('attachments', 0);
+    }
+
+    /** Editing someone else's private note is not a way to put pictures in it. */
+    public function test_an_image_cannot_be_uploaded_into_a_note_you_may_not_edit(): void
+    {
+        Storage::fake('local');
+
+        $member = $this->member();
+
+        $theirs = Note::factory()->create([
+            'tenant_id' => $this->tenant->id,
+            'author_id' => $member->id,
+            'visibility' => 'private',
+        ]);
+
+        $this->actingAs($this->owner)
+            ->post(route('attachments.inline'), [
+                'file' => UploadedFile::fake()->image('x.png'),
+                'note_id' => $theirs->id,
+            ])
+            ->assertForbidden();
+
+        $this->assertDatabaseCount('attachments', 0);
+    }
+
+    /**
+     * A note that is one pasted screenshot has no words at all. Judging it on
+     * its text would refuse to save the only thing in it.
+     */
+    public function test_a_note_that_is_only_an_image_can_be_saved(): void
+    {
+        Storage::fake('local');
+
+        $this->actingAs($this->owner)
+            ->post(route('attachments.inline'), ['file' => UploadedFile::fake()->image('whiteboard.png')])
+            ->assertCreated();
+
+        $attachment = Attachment::firstOrFail();
+
+        Livewire::actingAs($this->owner)
+            ->test('pages::notes')
+            ->call('create')
+            ->set('form_body', '<img src="'.$attachment->inlineSrc().'" alt="">')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $note = Note::firstOrFail();
+
+        $this->assertSame($note->id, $attachment->refresh()->attachable_id);
+        // Nothing to preview on the card, which is what coverImage is for.
+        $this->assertSame('', $note->body_text);
+        $this->assertSame($attachment->id, $note->coverImage->id);
+    }
+
+    /** An image in a body that points off-site is stripped before it is stored. */
+    public function test_a_note_cannot_store_an_image_hosted_somewhere_else(): void
+    {
+        Livewire::actingAs($this->owner)
+            ->test('pages::notes')
+            ->call('create')
+            ->set('form_body', '<div>Read this</div><img src="https://tracker.example/pixel.gif">')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $this->assertStringNotContainsString('tracker.example', Note::firstOrFail()->body);
+    }
+
+    /** Abandoned uploads are swept, so a closed composer does not leak bytes. */
+    public function test_images_from_a_composer_that_was_never_saved_are_pruned(): void
+    {
+        Storage::fake('local');
+
+        $stale = app(AttachmentService::class)->store(
+            UploadedFile::fake()->image('abandoned.png'), null, $this->owner, $this->tenant->id, embedded: true,
+        );
+
+        $fresh = app(AttachmentService::class)->store(
+            UploadedFile::fake()->image('still-writing.png'), null, $this->owner, $this->tenant->id, embedded: true,
+        );
+
+        $attached = app(AttachmentService::class)->store(
+            UploadedFile::fake()->image('kept.png'),
+            Note::factory()->create(['tenant_id' => $this->tenant->id, 'author_id' => $this->owner->id]),
+            $this->owner,
+            $this->tenant->id,
+            embedded: true,
+        );
+
+        $stale->forceFill(['created_at' => now()->subDays(2)])->save();
+
+        $this->artisan('attachments:prune-orphans')->assertSuccessful();
+
+        $this->assertDatabaseMissing('attachments', ['id' => $stale->id]);
+        Storage::disk('local')->assertMissing($stale->path);
+
+        // Still being written, and already on a note: both left alone.
+        $this->assertDatabaseHas('attachments', ['id' => $fresh->id]);
+        $this->assertDatabaseHas('attachments', ['id' => $attached->id]);
+    }
 }
